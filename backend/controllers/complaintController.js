@@ -412,16 +412,100 @@ const deleteComplaint = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc    민원 상태 변경
+ * @desc    민원 상태 변경 (교사/관리자 전용)
  * @route   PATCH /api/complaints/:id/status
  * @access  Private (Teacher+)
  */
 const updateComplaintStatus = asyncHandler(async (req, res) => {
-  // TODO: 민원 상태 변경 로직 구현
-  res.json({
-    success: true,
-    message: '민원 상태 변경 (구현 예정)'
+  const { id } = req.params;
+  const complaintId = parseInt(id);
+  const { status, assigned_to, response } = req.body;
+
+  // ID 유효성 검사
+  if (isNaN(complaintId) || complaintId <= 0) {
+    throw createError.badRequest('유효하지 않은 민원 ID입니다.');
+  }
+
+  // 권한 검사 (교사/관리자만 접근 가능 - 라우터에서 이미 체크되지만 추가 보안)
+  if (!['teacher', 'admin'].includes(req.user.role)) {
+    throw createError.forbidden('민원 상태 변경 권한이 없습니다.');
+  }
+
+  logger.info('민원 상태 변경 요청:', { 
+    complaintId, 
+    userId: req.user.id, 
+    userRole: req.user.role,
+    newStatus: status,
+    assignedTo: assigned_to,
+    hasResponse: !!response
   });
+
+  try {
+    // 유효한 상태 전환인지 검사
+    const validStatuses = ['submitted', 'in_progress', 'resolved', 'closed'];
+    if (!validStatuses.includes(status)) {
+      throw createError.badRequest('유효하지 않은 상태값입니다.');
+    }
+
+    // 담당자 ID 유효성 검사 (선택사항)
+    if (assigned_to !== undefined && assigned_to !== null) {
+      const assignedToId = parseInt(assigned_to);
+      if (isNaN(assignedToId) || assignedToId <= 0) {
+        throw createError.badRequest('유효하지 않은 담당자 ID입니다.');
+      }
+    }
+
+    // 상태 변경 실행
+    const updatedComplaint = await ComplaintModel.updateStatus(
+      complaintId,
+      status,
+      assigned_to || null,
+      response?.trim() || null,
+      req.user.id
+    );
+
+    if (!updatedComplaint) {
+      throw createError.notFound('민원을 찾을 수 없습니다.');
+    }
+
+    logger.info('민원 상태 변경 성공:', { 
+      complaintId: updatedComplaint.id, 
+      userId: req.user.id,
+      changedBy: req.user.id,
+      newStatus: updatedComplaint.status,
+      assignedTo: updatedComplaint.assigned_to,
+      hasResponse: !!updatedComplaint.response
+    });
+
+    res.json({
+      success: true,
+      message: '민원 상태가 성공적으로 변경되었습니다.',
+      data: {
+        complaint: {
+          id: updatedComplaint.id,
+          status: updatedComplaint.status,
+          assigned_to: updatedComplaint.assigned_to,
+          response: updatedComplaint.response,
+          updated_at: updatedComplaint.updated_at,
+          resolved_at: updatedComplaint.resolved_at
+        }
+      }
+    });
+
+  } catch (error) {
+    logger.error('민원 상태 변경 오류:', error);
+    
+    if (error.statusCode) {
+      throw error; // 이미 처리된 HTTP 에러는 그대로 전달
+    }
+    
+    // 데이터베이스 제약조건 오류 처리
+    if (error.code === '23503') { // Foreign key constraint violation
+      throw createError.badRequest('유효하지 않은 담당자 ID입니다.');
+    }
+    
+    throw createError.internalServerError('민원 상태 변경 중 오류가 발생했습니다.');
+  }
 });
 
 /**
@@ -470,7 +554,7 @@ const addComplaintAttachment = asyncHandler(async (req, res) => {
  * @access  Private (Teacher+)
  */
 const getComplaintStats = asyncHandler(async (req, res) => {
-  // TODO: 민원 통계 조회 로직 구현
+  // TODO: ��원 통계 조회 로직 구현
   res.json({
     success: true,
     message: '민원 통계 조회 (구현 예정)',
