@@ -1,10 +1,11 @@
 /**
- * 📧 이메일 유틸리티
+ * 📧 이메일 유틸리티 (개선된 버전)
  * 
  * @description Nodemailer를 사용한 이메일 발송 시스템
  */
 
 const nodemailer = require('nodemailer');
+const authEmailTemplates = require('../templates/authEmailTemplates');
 const logger = require('./logger');
 
 /**
@@ -15,26 +16,40 @@ let transporter = null;
 function createTransporter() {
   if (transporter) return transporter;
 
-  transporter = nodemailer.createTransporter({
+  const emailConfig = {
     service: process.env.EMAIL_SERVICE || 'gmail',
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.EMAIL_PORT) || 587,
-    secure: process.env.EMAIL_PORT === '465',
+    secure: process.env.EMAIL_PORT === '465', // true for 465, false for other ports
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD
     },
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
-  });
+    pool: true, // 연결 풀 사용
+    maxConnections: 5, // 최대 연결 수
+    maxMessages: 100, // 연결당 최대 메시지 수
+    rateDelta: 1000, // Rate limiting
+    rateLimit: 5 // 초당 최대 5개 이메일
+  };
 
-  // 연결 확인
+  transporter = nodemailer.createTransporter(emailConfig);
+
+  // 연결 테스트
   transporter.verify((error, success) => {
     if (error) {
-      logger.error('이메일 설정 오류:', error);
+      logger.error('이메일 서버 연결 실패:', {
+        error: error.message,
+        host: emailConfig.host,
+        port: emailConfig.port,
+        service: emailConfig.service
+      });
     } else {
-      logger.info('이메일 서버 연결 성공');
+      logger.info('이메일 서버 연결 성공:', {
+        host: emailConfig.host,
+        port: emailConfig.port,
+        service: emailConfig.service,
+        user: emailConfig.auth.user
+      });
     }
   });
 
@@ -42,260 +57,286 @@ function createTransporter() {
 }
 
 /**
- * 이메일 템플릿 생성
+ * 이메일 발송 (개선된 버전)
+ * @param {Object} options - 이메일 옵션
+ * @param {string} options.to - 수신자 이메일
+ * @param {string} options.subject - 제목 (선택사항, 템플릿에서 가져올 수 있음)
+ * @param {string} options.template - 템플릿 이름
+ * @param {Object} options.data - 템플릿 데이터
+ * @param {string} options.html - 직접 HTML (템플릿 미사용시)
+ * @param {string} options.text - 직접 텍스트 (템플릿 미사용시)
+ * @param {Array} options.attachments - 첨부파일 배열
+ * @returns {Promise<Object>} 발송 결과
  */
-function createEmailTemplate(type, data) {
-  const baseStyle = `
-    <style>
-      body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-      .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-      .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
-      .content { padding: 30px; line-height: 1.6; color: #333; }
-      .footer { background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #666; }
-      .button { display: inline-block; padding: 12px 30px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-      .code { background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 18px; text-align: center; margin: 20px 0; border: 2px dashed #dee2e6; }
-    </style>
-  `;
-
-  const templates = {
-    // 회원가입 환영 이메일
-    welcome: `
-      ${baseStyle}
-      <div class="container">
-        <div class="header">
-          <h1>🏫 학교 민원시스템</h1>
-          <p>회원가입을 환영합니다!</p>
-        </div>
-        <div class="content">
-          <h2>안녕하세요, ${data.name}님!</h2>
-          <p>학교 민원시스템에 가입해 주셔서 감사합니다.</p>
-          <p>이제 다음과 같은 서비스를 이용하실 수 있습니다:</p>
-          <ul>
-            <li>📝 민원 신청 및 처리 현황 확인</li>
-            <li>📅 학교 방문 예약</li>
-            <li>🔔 실시간 알림 서비스</li>
-            <li>👥 교사 및 관리자와의 소통</li>
-          </ul>
-          <p>궁금한 사항이 있으시면 언제든지 문의해 주세요.</p>
-        </div>
-        <div class="footer">
-          <p>© 2025 학교 민원시스템. All rights reserved.</p>
-        </div>
-      </div>
-    `,
-
-    // 민원 접수 확인 이메일
-    complaint_received: `
-      ${baseStyle}
-      <div class="container">
-        <div class="header">
-          <h1>📝 민원 접수 완료</h1>
-        </div>
-        <div class="content">
-          <h2>민원이 정상적으로 접수되었습니다</h2>
-          <div style="background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
-            <p><strong>민원 번호:</strong> ${data.complaintId}</p>
-            <p><strong>제목:</strong> ${data.title}</p>
-            <p><strong>카테고리:</strong> ${data.category}</p>
-            <p><strong>접수일:</strong> ${data.createdAt}</p>
-            <p><strong>상태:</strong> 접수 완료</p>
-          </div>
-          <p>담당자가 검토 후 빠른 시일 내에 답변드리겠습니다.</p>
-          <p>민원 처리 현황은 앱에서 실시간으로 확인하실 수 있습니다.</p>
-        </div>
-        <div class="footer">
-          <p>민원 처리에 관한 문의: admin@school-system.com</p>
-        </div>
-      </div>
-    `,
-
-    // 방문 예약 확인 이메일
-    visit_confirmed: `
-      ${baseStyle}
-      <div class="container">
-        <div class="header">
-          <h1>📅 방문 예약 확정</h1>
-        </div>
-        <div class="content">
-          <h2>방문 예약이 승인되었습니다</h2>
-          <div style="background: #e8f5e8; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <p><strong>방문자:</strong> ${data.visitorName}</p>
-            <p><strong>방문일:</strong> ${data.visitDate}</p>
-            <p><strong>방문시간:</strong> ${data.visitTime}</p>
-            <p><strong>방문목적:</strong> ${data.purpose}</p>
-            <p><strong>QR코드:</strong></p>
-            <div class="code">${data.qrCode}</div>
-          </div>
-          <p>⚠️ <strong>중요 안내사항:</strong></p>
-          <ul>
-            <li>방문 시 QR코드를 교문에서 제시해 주세요</li>
-            <li>신분증을 지참해 주세요</li>
-            <li>예약 시간 10분 전까지 도착해 주세요</li>
-            <li>변경 사항이 있을 시 미리 연락 부탁드립니다</li>
-          </ul>
-        </div>
-        <div class="footer">
-          <p>방문 관련 문의: 031-123-4567</p>
-        </div>
-      </div>
-    `,
-
-    // 비밀번호 재설정 이메일
-    password_reset: `
-      ${baseStyle}
-      <div class="container">
-        <div class="header">
-          <h1>🔐 비밀번호 재설정</h1>
-        </div>
-        <div class="content">
-          <h2>비밀번호 재설정 요청</h2>
-          <p>안녕하세요, ${data.name}님.</p>
-          <p>비밀번호 재설정을 요청하셨습니다. 아래 버튼을 클릭하여 새 비밀번호를 설정해 주세요.</p>
-          <div style="text-align: center;">
-            <a href="${data.resetLink}" class="button">비밀번호 재설정하기</a>
-          </div>
-          <p>또는 아래 인증코드를 입력해 주세요:</p>
-          <div class="code">${data.resetCode}</div>
-          <p><strong>⚠️ 보안 안내:</strong></p>
-          <ul>
-            <li>이 링크는 1시간 후 만료됩니다</li>
-            <li>요청하지 않으셨다면 이 이메일을 무시해 주세요</li>
-            <li>비밀번호는 타인과 공유하지 마세요</li>
-          </ul>
-        </div>
-        <div class="footer">
-          <p>보안 관련 문의: security@school-system.com</p>
-        </div>
-      </div>
-    `,
-
-    // 알림 이메일
-    notification: `
-      ${baseStyle}
-      <div class="container">
-        <div class="header">
-          <h1>${data.icon} ${data.title}</h1>
-        </div>
-        <div class="content">
-          <p>${data.message}</p>
-          ${data.details ? `<div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">${data.details}</div>` : ''}
-          ${data.actionUrl ? `<div style="text-align: center;"><a href="${data.actionUrl}" class="button">확인하기</a></div>` : ''}
-        </div>
-        <div class="footer">
-          <p>이 알림은 자동으로 발송되었습니다.</p>
-        </div>
-      </div>
-    `
-  };
-
-  return templates[type] || templates.notification;
-}
-
-/**
- * 이메일 발송
- */
-async function sendEmail(to, subject, type, data, attachments = []) {
+const sendEmail = async (options) => {
   try {
+    // 이메일 전송 설정 확인
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      logger.warn('이메일 설정이 완료되지 않았습니다.');
-      return false;
+      logger.warn('이메일 설정이 완료되지 않음 - 개발 모드에서 스킵');
+      return { success: true, messageId: 'dev-mode-skip', message: '개발 모드에서 스킵됨' };
     }
 
     const emailTransporter = createTransporter();
-    const html = createEmailTemplate(type, data);
-
-    const mailOptions = {
-      from: {
-        name: process.env.EMAIL_FROM_NAME || '학교 민원시스템',
-        address: process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER
-      },
-      to,
-      subject,
-      html,
-      attachments
+    
+    let emailContent = {
+      html: options.html || '',
+      text: options.text || '',
+      subject: options.subject || ''
     };
 
-    const result = await emailTransporter.sendMail(mailOptions);
-    
-    logger.info('이메일 발송 성공:', {
-      to,
-      subject,
-      messageId: result.messageId
+    // 템플릿 사용
+    if (options.template && authEmailTemplates[options.template]) {
+      const templateFunction = authEmailTemplates[options.template];
+      const templateResult = templateFunction(options.data || {});
+      
+      emailContent = {
+        html: templateResult.html,
+        text: templateResult.text,
+        subject: options.subject || templateResult.subject
+      };
+    }
+
+    // 기본 발신자 정보
+    const fromName = process.env.EMAIL_FROM_NAME || '학교 민원시스템';
+    const fromAddress = process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER;
+
+    const mailOptions = {
+      from: `"${fromName}" <${fromAddress}>`,
+      to: options.to,
+      subject: emailContent.subject,
+      html: emailContent.html,
+      text: emailContent.text,
+      attachments: options.attachments || [],
+      
+      // 메일 헤더 추가
+      headers: {
+        'X-Mailer': 'School Complaint System v1.0',
+        'X-Priority': options.priority || '3', // 1: High, 3: Normal, 5: Low
+        'Reply-To': process.env.EMAIL_REPLY_TO || fromAddress
+      },
+
+      // 배달 옵션
+      envelope: {
+        from: fromAddress,
+        to: options.to
+      }
+    };
+
+    // 이메일 발송
+    logger.info('이메일 발송 시작:', {
+      to: options.to,
+      subject: emailContent.subject,
+      template: options.template || 'custom',
+      hasAttachments: !!(options.attachments && options.attachments.length > 0)
     });
 
-    return true;
+    const result = await emailTransporter.sendMail(mailOptions);
+
+    logger.info('이메일 발송 성공:', {
+      messageId: result.messageId,
+      to: options.to,
+      subject: emailContent.subject,
+      response: result.response
+    });
+
+    return {
+      success: true,
+      messageId: result.messageId,
+      response: result.response,
+      to: options.to,
+      subject: emailContent.subject
+    };
+
   } catch (error) {
-    logger.error('이메일 발송 실패:', error);
-    return false;
+    logger.error('이메일 발송 실패:', {
+      to: options.to,
+      subject: options.subject,
+      template: options.template,
+      error: error.message,
+      code: error.code,
+      command: error.command
+    });
+
+    // 에러 타입별 상세 로깅
+    if (error.code === 'EAUTH') {
+      logger.error('이메일 인증 실패 - 설정을 확인하세요');
+    } else if (error.code === 'ECONNECTION') {
+      logger.error('이메일 서버 연결 실패');
+    } else if (error.code === 'EMESSAGE') {
+      logger.error('이메일 메시지 오류');
+    }
+
+    throw error;
   }
-}
+};
 
 /**
  * 대량 이메일 발송
+ * @param {Array} recipients - 수신자 배열 [{ email, data }]
+ * @param {string} template - 템플릿 이름
+ * @param {Object} commonData - 공통 데이터
+ * @param {Object} options - 추가 옵션
+ * @returns {Promise<Object>} 발송 결과 통계
  */
-async function sendBulkEmail(recipients, subject, type, data) {
-  const results = [];
-  
-  for (const recipient of recipients) {
-    try {
-      const success = await sendEmail(recipient.email, subject, type, {
-        ...data,
-        name: recipient.name
-      });
-      
-      results.push({
-        email: recipient.email,
-        success,
-        name: recipient.name
-      });
-      
-      // 이메일 발송 간격 (스팸 방지)
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-    } catch (error) {
-      logger.error(`이메일 발송 실패 (${recipient.email}):`, error);
-      results.push({
-        email: recipient.email,
-        success: false,
-        error: error.message
-      });
+const sendBulkEmail = async (recipients, template, commonData = {}, options = {}) => {
+  const results = {
+    total: recipients.length,
+    success: 0,
+    failed: 0,
+    errors: []
+  };
+
+  const batchSize = options.batchSize || 10;
+  const delay = options.delayMs || 1000;
+
+  logger.info('대량 이메일 발송 시작:', {
+    total: recipients.length,
+    template,
+    batchSize
+  });
+
+  // 배치 단위로 처리
+  for (let i = 0; i < recipients.length; i += batchSize) {
+    const batch = recipients.slice(i, i + batchSize);
+    
+    const batchPromises = batch.map(async (recipient) => {
+      try {
+        const emailData = { ...commonData, ...recipient.data };
+        
+        await sendEmail({
+          to: recipient.email,
+          template,
+          data: emailData,
+          ...options
+        });
+
+        results.success++;
+        
+        logger.debug('대량 이메일 개별 발송 성공:', {
+          email: recipient.email,
+          template
+        });
+
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          email: recipient.email,
+          error: error.message
+        });
+
+        logger.error('대량 이메일 개별 발송 실패:', {
+          email: recipient.email,
+          error: error.message
+        });
+      }
+    });
+
+    // 배치 완료 대기
+    await Promise.allSettled(batchPromises);
+
+    // 다음 배치 전 대기 (Rate limiting)
+    if (i + batchSize < recipients.length) {
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  
-  const successCount = results.filter(r => r.success).length;
-  logger.info(`대량 이메일 발송 완료: ${successCount}/${recipients.length}`);
-  
+
+  logger.info('대량 이메일 발송 완료:', results);
+
   return results;
-}
+};
 
 /**
- * 이메일 템플릿 미리보기
+ * 이메일 템플릿 미리보기 생성
+ * @param {string} template - 템플릿 이름
+ * @param {Object} data - 템플릿 데이터
+ * @returns {Object} 미리보기 HTML 및 텍스트
  */
-function previewTemplate(type, data) {
-  return createEmailTemplate(type, data);
-}
+const previewTemplate = (template, data) => {
+  if (!authEmailTemplates[template]) {
+    throw new Error(`템플릿 '${template}'을 찾을 수 없습니다.`);
+  }
+
+  const templateFunction = authEmailTemplates[template];
+  const result = templateFunction(data);
+
+  return {
+    subject: result.subject,
+    html: result.html,
+    text: result.text
+  };
+};
 
 /**
- * 이메일 서비스 상태 확인
+ * 이메일 서버 연결 상태 확인
+ * @returns {Promise<boolean>} 연결 ��태
  */
-async function checkEmailService() {
+const checkEmailConnection = async () => {
   try {
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      return { status: 'disabled', message: '이메일 설정이 완료되지 않았습니다.' };
+      return false;
     }
 
     const emailTransporter = createTransporter();
     await emailTransporter.verify();
     
-    return { status: 'active', message: '이메일 서비스가 정상 작동 중입니다.' };
+    logger.info('이메일 서버 연결 확인 성공');
+    return true;
   } catch (error) {
-    return { status: 'error', message: error.message };
+    logger.error('이메일 서버 연결 확인 실패:', error.message);
+    return false;
   }
-}
+};
+
+/**
+ * 이메일 큐 상태 확인 (간단한 구현)
+ */
+const getEmailQueueStatus = () => {
+  // 실제 환경에서는 Redis나 다른 큐 시스템 사용 권장
+  return {
+    pending: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0,
+    transporter: !!transporter
+  };
+};
+
+/**
+ * 이메일 발송 통계
+ */
+let emailStats = {
+  totalSent: 0,
+  totalFailed: 0,
+  lastSent: null,
+  startTime: Date.now()
+};
+
+const getEmailStats = () => {
+  return {
+    ...emailStats,
+    uptime: Date.now() - emailStats.startTime,
+    successRate: emailStats.totalSent > 0 
+      ? ((emailStats.totalSent / (emailStats.totalSent + emailStats.totalFailed)) * 100).toFixed(2)
+      : 0
+  };
+};
+
+// 통계 업데이트 함수
+const updateEmailStats = (success) => {
+  if (success) {
+    emailStats.totalSent++;
+    emailStats.lastSent = new Date();
+  } else {
+    emailStats.totalFailed++;
+  }
+};
 
 module.exports = {
   sendEmail,
   sendBulkEmail,
   previewTemplate,
-  checkEmailService
+  checkEmailConnection,
+  getEmailQueueStatus,
+  getEmailStats,
+  createTransporter
 };
