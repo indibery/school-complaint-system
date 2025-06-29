@@ -1,0 +1,114 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+
+# Database
+*.sqlite
+*.db
+
+# Build output
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# Docker
+.dockerignore
+
+# Secrets and keys
+*.pem
+*.key
+*.crt
+*.p8
+*.p12
+*.pfx
+
+# Mobile specific
+*.ipa
+*.apk
+*.aab
+
+# React Native specific
+# Xcode
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+
+# Android/IntelliJ
+build/
+.idea
+.gradle
+local.properties
+*.iml
+*.hprof
+
+# Metro
+.metro-health-check*
+
+# Bundle artifacts
+*.jsbundle
+
+# Flipper
+# Flipper DevTools
+ios/Pods*
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+
+# Amazon Lightsail
+*.pem
