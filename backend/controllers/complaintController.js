@@ -252,20 +252,101 @@ const getComplaintById = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const updateComplaint = asyncHandler(async (req, res) => {
-  // TODO: 민원 수정 로직 구현
   const { id } = req.params;
-  
-  res.json({
-    success: true,
-    message: '민원 수정 (구현 예정)',
-    data: {
-      complaint: {
-        id,
-        ...req.body,
-        updated_at: new Date().toISOString()
-      }
-    }
+  const complaintId = parseInt(id);
+  const { title, description, category, priority, anonymous } = req.body;
+
+  // ID 유효성 검사
+  if (isNaN(complaintId) || complaintId <= 0) {
+    throw createError.badRequest('유효하지 않은 민원 ID입니다.');
+  }
+
+  logger.info('민원 수정 요청:', { 
+    complaintId, 
+    userId: req.user.id, 
+    userRole: req.user.role,
+    updateData: { title, category, priority, anonymous }
   });
+
+  try {
+    // 수정할 데이터 준비 (undefined 값 제거)
+    const updateData = {};
+    
+    if (title !== undefined) {
+      updateData.title = title.trim();
+    }
+    
+    if (description !== undefined) {
+      updateData.description = description.trim();
+    }
+    
+    if (category !== undefined) {
+      updateData.category = category;
+    }
+    
+    if (priority !== undefined) {
+      updateData.priority = priority;
+    }
+    
+    if (anonymous !== undefined) {
+      updateData.anonymous = anonymous;
+    }
+
+    // 수정할 데이터가 없는 경우
+    if (Object.keys(updateData).length === 0) {
+      throw createError.badRequest('수정할 데이터가 없습니다.');
+    }
+
+    // 민원 수정 (권한 검사 포함)
+    const updatedComplaint = await ComplaintModel.update(
+      complaintId, 
+      updateData, 
+      req.user.role, 
+      req.user.id
+    );
+
+    if (!updatedComplaint) {
+      throw createError.notFound('민원을 찾을 수 없거나 수정 권한이 없습니다.');
+    }
+
+    logger.info('민원 수정 성공:', { 
+      complaintId: updatedComplaint.id, 
+      userId: req.user.id,
+      updatedFields: Object.keys(updateData)
+    });
+
+    res.json({
+      success: true,
+      message: '민원이 성공적으로 수정되었습니다.',
+      data: {
+        complaint: {
+          id: updatedComplaint.id,
+          title: updatedComplaint.title,
+          description: updatedComplaint.description,
+          category: updatedComplaint.category,
+          status: updatedComplaint.status,
+          priority: updatedComplaint.priority,
+          anonymous: updatedComplaint.anonymous,
+          created_at: updatedComplaint.created_at,
+          updated_at: updatedComplaint.updated_at
+        }
+      }
+    });
+
+  } catch (error) {
+    logger.error('민원 수정 오류:', error);
+    
+    if (error.statusCode) {
+      throw error; // 이미 처리된 HTTP 에러는 그대로 전달
+    }
+    
+    // 데이터베이스 제약조건 오류 처리
+    if (error.code === '23505') {
+      throw createError.conflict('동일한 제목의 민원이 이미 존재합니다.');
+    }
+    
+    throw createError.internalServerError('민원 수정 중 오류가 발생했습니다.');
+  }
 });
 
 /**
