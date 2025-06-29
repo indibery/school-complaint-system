@@ -169,8 +169,15 @@ const refreshToken = asyncHandler(async (req, res) => {
     throw createError.badRequest('리프레시 토큰이 필요합니다.');
   }
 
+  // Authorization 헤더에서 기존 액세스 토큰 추출
+  let oldAccessToken = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    oldAccessToken = authHeader.substring(7);
+  }
+
   // 리프레시 토큰으로 새 액세스 토큰 생성
-  const result = await refreshAccessToken(token);
+  const result = await refreshAccessToken(token, oldAccessToken);
 
   logger.info('토큰 갱신 성공:', {
     userId: result.user.id,

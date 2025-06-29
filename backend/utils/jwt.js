@@ -21,6 +21,7 @@ const generateToken = (user, tokenType = 'access') => {
     email: user.email,
     role: user.role,
     tokenType,
+    tokenVersion: user.token_version || 1,
     iat: Math.floor(Date.now() / 1000),
     jti: crypto.randomUUID() // JWT ID for token tracking
   };
@@ -137,25 +138,38 @@ const getTokenExpiration = (token) => {
 class TokenBlacklist {
   /**
    * 토큰을 블랙리스트에 추가
-   * @param {string} token - 블랙리스트에 추가할 토큰
+   * @param {string} tokenOrJti - 토큰 또는 JTI
    * @param {string} reason - 블랙리스트 추가 사유
+   * @param {number} exp - 토큰 만료 시간 (Unix timestamp)
    */
-  static async addToBlacklist(token, reason = 'logout') {
+  static async addToBlacklist(tokenOrJti, reason = 'logout', exp = null) {
     try {
-      const decoded = jwt.decode(token);
-      if (!decoded) return;
-
-      const expiresAt = new Date(decoded.exp * 1000);
-      const jti = decoded.jti;
+      let jti, userId, expiresAt;
+      
+      // 토큰인지 JTI인지 확인
+      if (tokenOrJti.includes('.')) {
+        // JWT 토큰인 경우
+        const decoded = jwt.decode(tokenOrJti);
+        if (!decoded) return;
+        
+        jti = decoded.jti;
+        userId = decoded.userId;
+        expiresAt = new Date(decoded.exp * 1000);
+      } else {
+        // JTI만 제공된 경우
+        jti = tokenOrJti;
+        userId = null; // 필요시 별도 조회
+        expiresAt = exp ? new Date(exp * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+      }
 
       await query(`
         INSERT INTO token_blacklist (token_id, user_id, reason, expires_at, created_at)
         VALUES ($1, $2, $3, $4, NOW())
         ON CONFLICT (token_id) DO NOTHING
-      `, [jti, decoded.userId, reason, expiresAt]);
+      `, [jti, userId, reason, expiresAt]);
 
       logger.info('토큰 블랙리스트 추가', {
-        userId: decoded.userId,
+        userId,
         tokenId: jti,
         reason,
         expiresAt
@@ -233,9 +247,10 @@ const invalidateAllUserTokens = async (userId, reason = 'security') => {
 /**
  * 리프레시 토큰으로 새로운 액세스 토큰 생성
  * @param {string} refreshToken - 리프레시 토큰
- * @returns {Object} { accessToken, user }
+ * @param {string} oldAccessToken - 기존 액세스 토큰 (선택사항)
+ * @returns {Object} { accessToken, refreshToken, user }
  */
-const refreshAccessToken = async (refreshToken) => {
+const refreshAccessToken = async (refreshToken, oldAccessToken = null) => {
   try {
     // 리프레시 토큰 검증
     const decoded = verifyToken(refreshToken, 'refresh');
@@ -267,16 +282,33 @@ const refreshAccessToken = async (refreshToken) => {
       throw new Error('토큰이 무효화되었습니다.');
     }
 
-    // 새로운 액세스 토큰 생성
-    const accessToken = generateToken(user, 'access');
+    // 기존 액세스 토큰을 블랙리스트에 추가
+    if (oldAccessToken) {
+      try {
+        const oldDecoded = jwt.decode(oldAccessToken);
+        if (oldDecoded?.jti) {
+          await TokenBlacklist.addToBlacklist(oldDecoded.jti, 'token_refresh', oldDecoded.exp);
+        }
+      } catch (error) {
+        // 기존 토큰 블랙리스트 추가 실패는 무시 (이미 만료된 토큰일 수 있음)
+        logger.warn('기존 액세스 토큰 블랙리스트 추가 실패', { error: error.message });
+      }
+    }
 
-    logger.info('액세스 토큰 갱신 성공', {
+    // 새로운 토큰 쌍 생성 (보안 강화)
+    const newTokens = generateTokenPair(user);
+    
+    // 기존 리프레시 토큰을 블랙리스트에 추가 (보안 강화)
+    await TokenBlacklist.addToBlacklist(decoded.jti, 'token_refresh', decoded.exp);
+
+    logger.info('토큰 갱신 성공', {
       userId: user.id,
       email: user.email
     });
 
     return { 
-      accessToken, 
+      accessToken: newTokens.accessToken,
+      refreshToken: newTokens.refreshToken,
       user: {
         id: user.id,
         email: user.email,
@@ -294,7 +326,7 @@ const refreshAccessToken = async (refreshToken) => {
 
 /**
  * 토큰 정보 디코딩 (검증 없이)
- * @param {string} token - 디코딩��� 토큰
+ * @param {string} token - 디코딩할 토큰
  * @returns {Object|null} 디코딩된 정보
  */
 const decodeToken = (token) => {
