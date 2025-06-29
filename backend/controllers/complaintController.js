@@ -1,10 +1,11 @@
 /**
- * 📝 민원 컨트롤러 (템플릿)
+ * 📝 민원 컨트롤러
  * 
  * @description 민원 관리 관련 비즈니스 로직
  */
 
 const { asyncHandler, createError } = require('../middleware/errorHandler');
+const ComplaintModel = require('../models/ComplaintModel');
 const logger = require('../utils/logger');
 
 /**
@@ -13,22 +14,60 @@ const logger = require('../utils/logger');
  * @access  Private
  */
 const getComplaints = asyncHandler(async (req, res) => {
-  // TODO: 민원 목록 조회 로직 구현
-  logger.info('민원 목록 조회 요청:', { userId: req.user.id });
-  
-  res.json({
-    success: true,
-    message: '민원 목록 조회 (구현 예정)',
-    data: {
-      complaints: [],
-      pagination: {
-        page: 1,
-        limit: 10,
-        total: 0,
-        totalPages: 0
-      }
-    }
+  const {
+    page = 1,
+    limit = 10,
+    status,
+    category,
+    priority,
+    search,
+    anonymous,
+    sort = 'created_at',
+    order = 'desc'
+  } = req.query;
+
+  const options = {
+    page: parseInt(page),
+    limit: parseInt(limit),
+    userId: req.user.id,
+    userRole: req.user.role,
+    status,
+    category,
+    priority,
+    search,
+    anonymous: anonymous ? (anonymous === 'true') : null,
+    sortBy: sort,
+    sortOrder: order.toUpperCase()
+  };
+
+  logger.info('민원 목록 조회 요청:', { 
+    userId: req.user.id, 
+    userRole: req.user.role,
+    options 
   });
+  
+  try {
+    const result = await ComplaintModel.findAll(options);
+    
+    res.json({
+      success: true,
+      message: '민원 목록 조회 성공',
+      data: {
+        complaints: result.complaints,
+        pagination: result.pagination,
+        filters: {
+          status,
+          category,
+          priority,
+          search,
+          anonymous
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('민원 목록 조회 오류:', error);
+    throw createError.internalServerError('민원 목록 조회 중 오류가 발생했습니다.');
+  }
 });
 
 /**
