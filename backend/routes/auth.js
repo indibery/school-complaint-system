@@ -1,71 +1,62 @@
 /**
- * 🔐 인증 라우터
+ * 🔐 인증 라우터 (완전히 개선된 버전)
  * 
  * @description 사용자 인증 관련 API 엔드포인트
  */
 
 const express = require('express');
-const { authenticateToken, verifyRefreshToken } = require('../middleware/auth');
+const { 
+  authenticateToken, 
+  verifyRefreshToken, 
+  requireAdmin,
+  loginProtection 
+} = require('../middleware/auth');
 const { 
   validateUserRegistration, 
   validateLogin, 
-  validatePasswordChange 
+  validatePasswordChange,
+  handleValidationErrors
 } = require('../middleware/validation');
+const { body } = require('express-validator');
 const authController = require('../controllers/authController');
 
 const router = express.Router();
+
+// =================================
+// 📝 회원가입 관련 라우트
+// =================================
 
 /**
  * @route   POST /api/auth/register
  * @desc    회원가입
  * @access  Public
  */
-router.post('/register', validateUserRegistration, authController.register);
+router.post('/register', 
+  validateUserRegistration, 
+  authController.register
+);
 
 /**
- * @route   POST /api/auth/login
- * @desc    로그인
+ * @route   POST /api/auth/validate-registration
+ * @desc    회원가입 유효성 사전 검증
  * @access  Public
  */
-router.post('/login', validateLogin, authController.login);
-
-/**
- * @route   POST /api/auth/refresh
- * @desc    토큰 갱신
- * @access  Public (Refresh Token 필요)
- */
-router.post('/refresh', verifyRefreshToken, authController.refreshToken);
-
-/**
- * @route   POST /api/auth/logout
- * @desc    로그아웃
- * @access  Private
- */
-router.post('/logout', authenticateToken, authController.logout);
-
-/**
- * @route   POST /api/auth/forgot-password
- * @desc    비밀번호 찾기
- * @access  Public
- */
-router.post('/forgot-password', authController.forgotPassword);
-
-/**
- * @route   POST /api/auth/reset-password
- * @desc    비밀번호 재설정
- * @access  Public (Reset Token 필요)
- */
-router.post('/reset-password', authController.resetPassword);
-
-/**
- * @route   PUT /api/auth/change-password
- * @desc    비밀번호 변경
- * @access  Private
- */
-router.put('/change-password', 
-  authenticateToken, 
-  validatePasswordChange, 
-  authController.changePassword
+router.post('/validate-registration',
+  [
+    body('email')
+      .optional()
+      .isEmail()
+      .withMessage('유효한 이메일 주소를 입력해주세요.')
+      .normalizeEmail(),
+    
+    body('phone')
+      .optional()
+      .isMobilePhone('ko-KR')
+      .withMessage('유효한 한국 전화번호를 입력해주세요.'),
+    
+    handleValidationErrors
+  ],
+  authController.validateRegistration
 );
 
 /**
@@ -73,13 +64,55 @@ router.put('/change-password',
  * @desc    이메일 인증
  * @access  Public
  */
-router.post('/verify-email', authController.verifyEmail);
+router.post('/verify-email',
+  [
+    body('token')
+      .notEmpty()
+      .withMessage('인증 토큰이 필요합니다.')
+      .isLength({ min: 10, max: 200 })
+      .withMessage('유효하지 않은 토큰 형식입니다.'),
+    
+    handleValidationErrors
+  ],
+  authController.verifyEmail
+);
 
 /**
  * @route   POST /api/auth/resend-verification
  * @desc    인증 이메일 재발송
  * @access  Private
  */
-router.post('/resend-verification', authenticateToken, authController.resendVerification);
+router.post('/resend-verification',
+  authenticateToken,
+  authController.resendVerification
+);
+
+// =================================
+// 👥 계정 관리 라우트 (관리자용)
+// =================================
+
+/**
+ * @route   PUT /api/auth/account/:userId/status
+ * @desc    사용자 계정 활성화/비활성화
+ * @access  Private (Admin only)
+ */
+router.put('/account/:userId/status',
+  authenticateToken,
+  requireAdmin,
+  [
+    body('isActive')
+      .isBoolean()
+      .withMessage('활성화 상태는 true/false여야 합니다.'),
+    
+    body('reason')
+      .optional()
+      .trim()
+      .isLength({ min: 3, max: 200 })
+      .withMessage('사유는 3-200자 사이여야 합니다.'),
+    
+    handleValidationErrors
+  ],
+  authController.updateAccountStatus
+);
 
 module.exports = router;
