@@ -41,7 +41,7 @@ const validateUserRegistration = [
   body('password')
     .isLength({ min: 8 })
     .withMessage('비밀번호는 최소 8자리여야 합니다.')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])[A-Za-z\d!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]+$/)
     .withMessage('비밀번호는 대소문자, 숫자, 특수문자를 포함해야 합니다.'),
   
   body('name')
@@ -50,6 +50,7 @@ const validateUserRegistration = [
     .withMessage('이름은 2-50자 사이여야 합니다.'),
   
   body('phone')
+    .optional({ nullable: true, checkFalsy: true })
     .isMobilePhone('ko-KR')
     .withMessage('유효한 한국 전화번호를 입력해주세요.'),
   

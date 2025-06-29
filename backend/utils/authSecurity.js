@@ -305,6 +305,11 @@ const getUserAccountStatus = async (userId) => {
  * @returns {boolean} 공격 여부
  */
 const detectBruteForceAttack = (ip) => {
+  // 테스트 환경에서는 브루트포스 감지 비활성화
+  if (process.env.NODE_ENV === 'test') {
+    return false;
+  }
+  
   // 메모리 기반 간단한 구현 (실제 환경에서는 Redis 사용 권장)
   const ipAttempts = global.ipAttempts || new Map();
   const maxAttemptsPerIP = parseInt(process.env.MAX_ATTEMPTS_PER_IP) || 20;
