@@ -350,18 +350,65 @@ const updateComplaint = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc    민원 삭제
+ * @desc    민원 삭제 (소프트 삭제)
  * @route   DELETE /api/complaints/:id
  * @access  Private
  */
 const deleteComplaint = asyncHandler(async (req, res) => {
-  // TODO: 민원 삭제 로직 구현
   const { id } = req.params;
-  
-  res.json({
-    success: true,
-    message: '민원 삭제 (구현 예정)'
+  const complaintId = parseInt(id);
+
+  // ID 유효성 검사
+  if (isNaN(complaintId) || complaintId <= 0) {
+    throw createError.badRequest('유효하지 않은 민원 ID입니다.');
+  }
+
+  logger.info('민원 삭제 요청:', { 
+    complaintId, 
+    userId: req.user.id, 
+    userRole: req.user.role 
   });
+
+  try {
+    // 소프트 삭제 실행 (권한 검사 포함)
+    const deletedComplaint = await ComplaintModel.delete(
+      complaintId, 
+      req.user.role, 
+      req.user.id
+    );
+
+    if (!deletedComplaint) {
+      throw createError.notFound('민원을 찾을 수 없거나 삭제 권한이 없습니다.');
+    }
+
+    logger.info('민원 삭제 성공:', { 
+      complaintId: deletedComplaint.id, 
+      userId: req.user.id,
+      previousStatus: 'submitted',
+      newStatus: deletedComplaint.status
+    });
+
+    res.json({
+      success: true,
+      message: '민원이 성공적으로 삭제되었습니다.',
+      data: {
+        complaint: {
+          id: deletedComplaint.id,
+          status: deletedComplaint.status,
+          deleted_at: deletedComplaint.updated_at
+        }
+      }
+    });
+
+  } catch (error) {
+    logger.error('민원 삭제 오류:', error);
+    
+    if (error.statusCode) {
+      throw error; // 이미 처리된 HTTP 에러는 그대로 전달
+    }
+    
+    throw createError.internalServerError('민원 삭제 중 오류가 발생했습니다.');
+  }
 });
 
 /**
