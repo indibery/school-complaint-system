@@ -76,21 +76,66 @@ const getComplaints = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const createComplaint = asyncHandler(async (req, res) => {
-  // TODO: 민원 등록 로직 구현
-  logger.info('민원 등록 요청:', { userId: req.user.id, body: req.body });
+  const { title, description, category, priority = 'medium', anonymous = false } = req.body;
   
-  res.status(201).json({
-    success: true,
-    message: '민원 등록 (구현 예정)',
-    data: {
-      complaint: {
-        id: 'temp-id',
-        ...req.body,
-        status: 'pending',
-        created_at: new Date().toISOString()
-      }
-    }
+  logger.info('민원 등록 요청:', { 
+    userId: req.user.id, 
+    title, 
+    category, 
+    priority, 
+    anonymous 
   });
+
+  try {
+    // 민원 데이터 준비
+    const complaintData = {
+      user_id: req.user.id,
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      priority,
+      anonymous
+    };
+
+    // 민원 생성
+    const complaint = await ComplaintModel.create(complaintData);
+
+    logger.info('민원 등록 성공:', { 
+      complaintId: complaint.id, 
+      userId: req.user.id 
+    });
+
+    res.status(201).json({
+      success: true,
+      message: '민원이 성공적으로 등록되었습니다.',
+      data: {
+        complaint: {
+          id: complaint.id,
+          title: complaint.title,
+          description: complaint.description,
+          category: complaint.category,
+          status: complaint.status,
+          priority: complaint.priority,
+          anonymous: complaint.anonymous,
+          created_at: complaint.created_at,
+          updated_at: complaint.updated_at
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('민원 등록 오류:', error);
+    
+    // 데이터베이스 제약조건 오류 처리
+    if (error.code === '23505') { // Unique constraint violation
+      throw createError.conflict('이미 동일한 민원이 존재합니다.');
+    }
+    
+    if (error.code === '23503') { // Foreign key constraint violation
+      throw createError.badRequest('유효하지 않은 사용자 정보입니다.');
+    }
+    
+    throw createError.internalServerError('민원 등록 중 오류가 발생했습니다.');
+  }
 });
 
 /**
@@ -155,7 +200,7 @@ const deleteComplaint = asyncHandler(async (req, res) => {
 
 /**
  * @desc    민원 상태 변경
- * @route   PUT /api/complaints/:id/status
+ * @route   PATCH /api/complaints/:id/status
  * @access  Private (Teacher+)
  */
 const updateComplaintStatus = asyncHandler(async (req, res) => {
