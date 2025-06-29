@@ -7,6 +7,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 
+// 라우터 임포트
+const complaintRoutes = require('../../routes/complaints');
+
 // 테스트 환경용 Express 앱 생성
 function createTestApp() {
   const app = express();
@@ -20,6 +23,9 @@ function createTestApp() {
 
   // 모킹된 인증 라우터
   setupMockedAuthRoutes(app);
+
+  // 민원 라우터 연결
+  app.use('/api/complaints', complaintRoutes);
 
   // 헬스체크 엔드포인트
   app.get('/health', (req, res) => {
@@ -253,7 +259,7 @@ function setupMockedAuthRoutes(app) {
     if (token.length < 10) {
       return res.status(400).json({
         success: false,
-        message: '유효하지 않은 토큰 형식입니다.'
+        message: '유효하지 않은 토큰 형식��니다.'
       });
     }
 
@@ -423,6 +429,8 @@ function setupMockedAuthRoutes(app) {
       // JWT 토큰 생성
       const accessTokenPayload = {
         userId: foundUser.id,
+        email: foundUser.email,
+        role: foundUser.role,
         tokenVersion: foundUser.token_version,
         type: 'access',
         jti: uuidv4()
@@ -430,6 +438,8 @@ function setupMockedAuthRoutes(app) {
 
       const refreshTokenPayload = {
         userId: foundUser.id,
+        email: foundUser.email,
+        role: foundUser.role,
         tokenVersion: foundUser.token_version,
         type: 'refresh',
         jti: uuidv4()
@@ -722,7 +732,12 @@ function authenticateToken(req, res, next) {
       });
     }
 
-    req.user = user;
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name
+    };
     req.tokenPayload = decoded;
     next();
   } catch (error) {
