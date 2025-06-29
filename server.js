@@ -19,12 +19,13 @@ const { errorHandler, notFoundHandler } = require('./backend/middleware/errorHan
 const { dbHealthCheck } = require('./backend/utils/database');
 const logger = require('./backend/utils/logger');
 
-// 라우터 임포트 (추후 구현)
-// const authRoutes = require('./backend/routes/auth');
-// const complaintRoutes = require('./backend/routes/complaints');
-// const visitRoutes = require('./backend/routes/visits');
-// const securityRoutes = require('./backend/routes/security');
+// 라우터 임포트
+const authRoutes = require('./backend/routes/auth');
+const complaintRoutes = require('./backend/routes/complaints');
+const visitRoutes = require('./backend/routes/visits');
+const securityRoutes = require('./backend/routes/security');
 // const notificationRoutes = require('./backend/routes/notifications');
+// const userRoutes = require('./backend/routes/users');
 
 const app = express();
 
@@ -130,7 +131,7 @@ app.get('/health', async (req, res) => {
 });
 
 // =================================
-// 🚀 API 라우트 (추후 구현)
+// 🚀 API 라우트
 // =================================
 app.get('/api', (req, res) => {
   res.json({
@@ -145,21 +146,21 @@ app.get('/api', (req, res) => {
       'POST /api/complaints - 민원 등록',
       'GET /api/visits - 방문 예약 목록',
       'POST /api/visits - 방문 예약',
-      'GET /api/security/visitors - 현재 방문자 현황',
+      'GET /api/security/visitors/current - 현재 방문자 현황',
       'POST /api/security/checkin - 방문자 체크인',
-      'POST /api/security/checkout - 방문자 체크아웃',
-      'GET /api/notifications - 알림 목록'
+      'POST /api/security/checkout - 방문자 체크아웃'
     ],
-    documentation: NODE_ENV === 'development' ? '/api/docs' : null
+    documentation: NODE_ENV === 'development' ? '/docs/API.md' : null
   });
 });
 
-// 라우터 연결 (추후 구현)
-// app.use('/api/auth', authRoutes);
-// app.use('/api/complaints', complaintRoutes);
-// app.use('/api/visits', visitRoutes);
-// app.use('/api/security', securityRoutes);
+// API 라우터 연결
+app.use('/api/auth', authRoutes);
+app.use('/api/complaints', complaintRoutes);
+app.use('/api/visits', visitRoutes);
+app.use('/api/security', securityRoutes);
 // app.use('/api/notifications', notificationRoutes);
+// app.use('/api/users', userRoutes);
 
 // =================================
 // 🚫 에러 처리 미들웨어
@@ -193,6 +194,11 @@ async function startServer() {
 ║  📖 API 문서: http://localhost:${PORT}/api                    ║
 ║                                                              ║
 ║  🔧 개발 모드로 실행 중...                                    ║
+║  📚 API 라우터 연결 완료:                                     ║
+║    - 🔐 /api/auth (인증)                                    ║
+║    - 📝 /api/complaints (민원)                              ║
+║    - 📅 /api/visits (방문예약)                               ║
+║    - 🚪 /api/security (교문관리)                             ║
 ╚══════════════════════════════════════════════════════════════╝
         `);
       }
