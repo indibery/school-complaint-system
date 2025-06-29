@@ -1,11 +1,11 @@
 /**
- * 🔐 인증 컨트롤러 (완전히 개선된 버전)
+ * 🔐 인증 컨트롤러 (로그인/로그아웃 포함 완전판)
  * 
  * @description 사용자 인증 관련 비즈니스 로직
  */
 
 const { asyncHandler, createError } = require('../middleware/errorHandler');
-const { generateTokenPair } = require('../utils/jwt');
+const { generateTokenPair, refreshAccessToken, TokenBlacklist, invalidateAllUserTokens } = require('../utils/jwt');
 const { hashPassword, verifyPassword } = require('../utils/crypto');
 const { query, transaction } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
@@ -18,10 +18,14 @@ const {
   handleLoginFailure,
   handleLoginSuccess,
   detectBruteForceAttack,
-  generateSecurityHeaders
+  generateSecurityHeaders,
+  getUserAccountStatus
 } = require('../utils/authSecurity');
-const { TokenBlacklist, invalidateAllUserTokens } = require('../utils/jwt');
 const logger = require('../utils/logger');
+
+// =================================
+// 📝 회원가입 관련 컨트롤러
+// =================================
 
 /**
  * @desc    회원가입
@@ -93,7 +97,7 @@ const register = asyncHandler(async (req, res) => {
   const tokens = generateTokenPair(user);
 
   // 환영 이메일 발송 (비동기)
-  const welcomeEmailPromise = sendEmail({
+  sendEmail({
     to: email,
     subject: '🏫 학교 민원시스템 가입을 환영합니다!',
     template: 'welcome',
@@ -148,6 +152,333 @@ const register = asyncHandler(async (req, res) => {
     }
   });
 });
+
+// =================================
+// 🔑 로그인/로그아웃 관련 컨트롤러
+// =================================
+
+/**
+ * @desc    로그인
+ * @route   POST /api/auth/login
+ * @access  Public
+ */
+const login = asyncHandler(async (req, res) => {
+  const { email, password, rememberMe = false } = req.body;
+  const clientIp = req.ip || req.connection.remoteAddress;
+  const userAgent = req.get('User-Agent') || 'unknown';
+
+  // 브루트 포스 공격 감지
+  if (detectBruteForceAttack(clientIp)) {
+    throw createError.tooManyRequests('너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요.');
+  }
+
+  // 사용자 조회
+  const userResult = await query(
+    `SELECT 
+       id, email, password_hash, name, phone, role, is_active,
+       login_attempts, locked_until, email_verified_at, last_login_at
+     FROM users WHERE email = $1`,
+    [email]
+  );
+
+  if (userResult.rows.length === 0) {
+    // 로그인 실패 처리 (존재하지 않는 사용자)
+    await handleLoginFailure(email, clientIp);
+    throw createError.unauthorized('이메일 또는 비밀번호가 올바르지 않습니다.');
+  }
+
+  const user = userResult.rows[0];
+
+  // 계정 상태 확인
+  if (!user.is_active) {
+    logger.warn('비활성화된 계정 로그인 시도:', {
+      email: user.email,
+      ip: clientIp
+    });
+    throw createError.forbidden('비활성화된 계정입니다. 관리자에게 문의하세요.');
+  }
+
+  // 계정 잠금 확인
+  if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    const lockTime = Math.ceil((new Date(user.locked_until) - new Date()) / 1000 / 60);
+    logger.warn('잠긴 계정 로그인 시도:', {
+      email: user.email,
+      lockUntil: user.locked_until,
+      ip: clientIp
+    });
+    throw createError.tooManyRequests(`계정이 잠겨있습니다. ${lockTime}분 후 다시 시도해주세요.`);
+  }
+
+  // 비밀번호 확인
+  const isValidPassword = await verifyPassword(password, user.password_hash);
+  if (!isValidPassword) {
+    // 로그인 실패 처리
+    const failureResult = await handleLoginFailure(email, clientIp);
+    
+    if (failureResult.isLocked) {
+      throw createError.tooManyRequests(
+        `로그인 시도가 너무 많습니다. 계정이 ${failureResult.lockDurationMinutes}분 동안 잠겼습니다.`
+      );
+    }
+
+    const remainingAttempts = failureResult.remainingAttempts || 0;
+    throw createError.unauthorized(
+      `이메일 또는 비밀번호가 올바르지 않습니다. ${remainingAttempts}번의 기회가 남았습니다.`
+    );
+  }
+
+  // 로그인 성공 처리
+  await handleLoginSuccess(user.id, clientIp, userAgent);
+
+  // JWT 토큰 생성 (rememberMe에 따라 만료시간 조정)
+  const tokens = generateTokenPair(user);
+
+  // 보안 헤더 생성
+  const securityHeaders = generateSecurityHeaders(tokens.accessToken);
+  
+  // 응답 헤더 설정
+  Object.entries(securityHeaders).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
+
+  logger.info('사용자 로그인 성공:', {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    ip: clientIp,
+    userAgent: userAgent.substring(0, 100),
+    rememberMe
+  });
+
+  res.json({
+    success: true,
+    message: '로그인되었습니다.',
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+        emailVerified: !!user.email_verified_at,
+        lastLoginAt: user.last_login_at
+      },
+      tokens: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        tokenType: 'Bearer',
+        expiresIn: process.env.JWT_EXPIRES_IN || '24h'
+      },
+      session: {
+        rememberMe,
+        loginTime: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      }
+    },
+    meta: {
+      timestamp: new Date().toISOString(),
+      ip: clientIp
+    }
+  });
+});
+
+/**
+ * @desc    토큰 갱신
+ * @route   POST /api/auth/refresh
+ * @access  Public (Refresh Token 필요)
+ */
+const refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken: token } = req.body;
+  const clientIp = req.ip || req.connection.remoteAddress;
+
+  if (!token) {
+    throw createError.badRequest('리프레시 토큰이 필요합니다.');
+  }
+
+  // 리프레시 토큰으로 새 액세스 토큰 생성
+  const result = await refreshAccessToken(token);
+
+  logger.info('토큰 갱신 성공:', {
+    userId: result.user.id,
+    email: result.user.email,
+    ip: clientIp
+  });
+
+  res.json({
+    success: true,
+    message: '토큰이 갱신되었습니다.',
+    data: {
+      accessToken: result.accessToken,
+      tokenType: 'Bearer',
+      expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+      user: result.user
+    },
+    meta: {
+      timestamp: new Date().toISOString(),
+      refreshedAt: new Date().toISOString()
+    }
+  });
+});
+
+/**
+ * @desc    로그아웃
+ * @route   POST /api/auth/logout
+ * @access  Private
+ */
+const logout = asyncHandler(async (req, res) => {
+  const user = req.user;
+  const token = req.headers.authorization?.split(' ')[1];
+  const clientIp = req.ip || req.connection.remoteAddress;
+
+  if (token) {
+    // 현재 토큰을 블랙리스트에 추가
+    await TokenBlacklist.addToBlacklist(token, 'logout');
+  }
+
+  logger.info('사용자 로그아웃:', {
+    userId: user.id,
+    email: user.email,
+    ip: clientIp,
+    tokenId: user.tokenId
+  });
+
+  res.json({
+    success: true,
+    message: '로그아웃되었습니다.',
+    meta: {
+      timestamp: new Date().toISOString(),
+      logoutTime: new Date().toISOString()
+    }
+  });
+});
+
+/**
+ * @desc    모든 디바이스에서 로그아웃
+ * @route   POST /api/auth/logout-all
+ * @access  Private
+ */
+const logoutAll = asyncHandler(async (req, res) => {
+  const user = req.user;
+  const clientIp = req.ip || req.connection.remoteAddress;
+
+  // 사용자의 모든 토큰 무효화
+  await invalidateAllUserTokens(user.id, 'logout_all_devices');
+
+  logger.info('모든 디바이스에서 로그아웃:', {
+    userId: user.id,
+    email: user.email,
+    ip: clientIp
+  });
+
+  res.json({
+    success: true,
+    message: '모든 디바이스에서 로그아웃되었습니다.',
+    meta: {
+      timestamp: new Date().toISOString(),
+      logoutAllTime: new Date().toISOString()
+    }
+  });
+});
+
+/**
+ * @desc    현재 사용자 정보 조회
+ * @route   GET /api/auth/me
+ * @access  Private
+ */
+const getCurrentUser = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  // 상세한 사용자 정보 조회
+  const userResult = await query(
+    `SELECT 
+       id, email, name, phone, role, is_active,
+       email_verified_at, last_login_at, created_at, updated_at
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+
+  if (userResult.rows.length === 0) {
+    throw createError.notFound('사용자를 찾을 수 없습니다.');
+  }
+
+  const user = userResult.rows[0];
+  const accountStatus = await getUserAccountStatus(userId);
+
+  res.json({
+    success: true,
+    message: '사용자 정보 조회 성공',
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+        isActive: user.is_active,
+        emailVerified: !!user.email_verified_at,
+        emailVerifiedAt: user.email_verified_at,
+        lastLoginAt: user.last_login_at,
+        createdAt: user.created_at,
+        updatedAt: user.updated_at
+      },
+      accountStatus: {
+        status: accountStatus?.status || 'active',
+        isLocked: accountStatus?.isLocked || false,
+        isEmailVerified: accountStatus?.isEmailVerified || false,
+        loginAttempts: accountStatus?.loginAttempts || 0
+      }
+    },
+    meta: {
+      timestamp: new Date().toISOString(),
+      requestedBy: req.user.email
+    }
+  });
+});
+
+/**
+ * @desc    인증 상태 확인
+ * @route   GET /api/auth/status
+ * @access  Public
+ */
+const getAuthStatus = asyncHandler(async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  let isAuthenticated = false;
+  let user = null;
+
+  if (token) {
+    try {
+      // 토큰 간단 검증 (블랙리스트 확인 없이)
+      const decoded = require('jsonwebtoken').decode(token);
+      if (decoded && decoded.exp > Date.now() / 1000) {
+        isAuthenticated = true;
+        user = {
+          id: decoded.userId,
+          email: decoded.email,
+          role: decoded.role
+        };
+      }
+    } catch (error) {
+      // 토큰이 유효하지 않음
+    }
+  }
+
+  res.json({
+    success: true,
+    message: '인증 상태 확인 완료',
+    data: {
+      isAuthenticated,
+      user,
+      serverTime: new Date().toISOString(),
+      tokenProvided: !!token
+    }
+  });
+});
+
+// =================================
+// 📧 이메일 인증 관련 컨트롤러 (기존)
+// =================================
 
 /**
  * @desc    이메일 인증
@@ -367,9 +698,18 @@ const updateAccountStatus = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  // 회원가입 관련
   register,
   verifyEmail,
   resendVerification,
   validateRegistration,
-  updateAccountStatus
+  updateAccountStatus,
+  
+  // 로그인/로그아웃 관련
+  login,
+  logout,
+  logoutAll,
+  refreshToken,
+  getCurrentUser,
+  getAuthStatus
 };
