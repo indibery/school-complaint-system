@@ -144,21 +144,106 @@ const createComplaint = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const getComplaintById = asyncHandler(async (req, res) => {
-  // TODO: 민원 상세 조회 로직 구현
   const { id } = req.params;
-  
-  res.json({
-    success: true,
-    message: '민원 상세 조회 (구현 예정)',
-    data: {
-      complaint: {
-        id,
-        title: '샘플 민원',
-        description: '구현 예정',
-        status: 'pending'
-      }
-    }
+  const complaintId = parseInt(id);
+
+  // ID 유효성 검사
+  if (isNaN(complaintId) || complaintId <= 0) {
+    throw createError.badRequest('유효하지 않은 민원 ID입니다.');
+  }
+
+  logger.info('민원 상세 조회 요청:', { 
+    complaintId, 
+    userId: req.user.id, 
+    userRole: req.user.role 
   });
+
+  try {
+    // 권한에 따른 민원 조회
+    const complaint = await ComplaintModel.findById(
+      complaintId, 
+      req.user.role, 
+      req.user.id
+    );
+
+    if (!complaint) {
+      throw createError.notFound('민원을 찾을 수 없습니다.');
+    }
+
+    // 익명 민원의 경우 작성자 정보 마스킹 (교사/관리자 제외)
+    if (complaint.anonymous && req.user.role === 'parent') {
+      complaint.user_name = '익명';
+      complaint.user_email = null;
+    }
+
+    // 첨부파일 정보 조회
+    const attachments = await ComplaintModel.getAttachments(complaintId);
+
+    // 댓글 정보 조회 (권한에 따라 필터링)
+    const comments = await ComplaintModel.getComments(complaintId, req.user.role);
+
+    logger.info('민원 상세 조회 성공:', { 
+      complaintId, 
+      userId: req.user.id,
+      hasAttachments: attachments.length > 0,
+      commentCount: comments.length 
+    });
+
+    res.json({
+      success: true,
+      message: '민원 상세 조회 성공',
+      data: {
+        complaint: {
+          id: complaint.id,
+          title: complaint.title,
+          description: complaint.description,
+          category: complaint.category,
+          status: complaint.status,
+          priority: complaint.priority,
+          anonymous: complaint.anonymous,
+          response: complaint.response,
+          created_at: complaint.created_at,
+          updated_at: complaint.updated_at,
+          resolved_at: complaint.resolved_at,
+          user: {
+            id: complaint.anonymous && req.user.role === 'parent' ? null : complaint.user_id,
+            name: complaint.user_name,
+            email: complaint.user_email
+          },
+          assigned_to: complaint.assigned_to ? {
+            id: complaint.assigned_to,
+            name: complaint.assigned_name
+          } : null,
+          attachments: attachments.map(att => ({
+            id: att.id,
+            filename: att.original_name,
+            size: att.file_size,
+            type: att.mime_type,
+            uploaded_at: att.created_at
+          })),
+          comments: comments.map(comment => ({
+            id: comment.id,
+            content: comment.content,
+            is_internal: comment.is_internal,
+            created_at: comment.created_at,
+            user: {
+              name: comment.user_name,
+              role: comment.user_role
+            }
+          }))
+        }
+      }
+    });
+
+  } catch (error) {
+    logger.error('민원 상세 조회 오류:', error);
+    
+    if (error.statusCode) {
+      throw error; // 이미 처리된 HTTP 에러는 그대로 전달
+    }
+    
+    throw createError.internalServerError('민원 조회 중 오류가 발생했습니다.');
+  }
 });
 
 /**
