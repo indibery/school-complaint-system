@@ -18,7 +18,7 @@ const {
   validateSettings,
   handleValidationErrors
 } = require('../middleware/validation');
-const { body } = require('express-validator');
+const { body, query } = require('express-validator');
 const userController = require('../controllers/userController');
 
 const router = express.Router();
@@ -183,6 +183,13 @@ router.delete('/account',
  */
 router.get('/stats',
   authenticateToken,
+  [
+    query('period')
+      .optional()
+      .isIn(['7', '30', '90', '365'])
+      .withMessage('기간은 7, 30, 90, 365일 중 하나여야 합니다.')
+  ],
+  handleValidationErrors,
   userController.getUserStats
 );
 

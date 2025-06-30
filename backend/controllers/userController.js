@@ -521,14 +521,24 @@ const deleteAccount = async (req, res) => {
 };
 
 /**
- * 📊 사용자 통계 조회
+ * 📊 사용자 통계 조회 (향상된 버전)
  * @route GET /api/users/stats
  */
 const getUserStats = async (req, res) => {
   try {
     const userId = req.user.id;
+    const period = req.query.period || '30'; // 기본 30일
     
-    // 사용자의 민원 통계
+    // 기간 검증
+    const validPeriods = ['7', '30', '90', '365'];
+    if (!validPeriods.includes(period)) {
+      return res.status(400).json({
+        success: false,
+        message: '유효한 기간을 선택해주세요. (7, 30, 90, 365일)'
+      });
+    }
+    
+    // 사용자의 민원 통계 (향상된 버전)
     const complaintResult = await query(`
       SELECT 
         COUNT(*) as total_complaints,
@@ -536,24 +546,86 @@ const getUserStats = async (req, res) => {
         COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_complaints,
         COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_complaints,
         COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_complaints,
-        COUNT(CASE WHEN created_at >= NOW() - INTERVAL '30 days' THEN 1 END) as recent_complaints
+        COUNT(CASE WHEN created_at >= NOW() - INTERVAL '${period} days' THEN 1 END) as recent_complaints,
+        COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_priority_complaints,
+        COUNT(CASE WHEN priority = 'medium' THEN 1 END) as medium_priority_complaints,
+        COUNT(CASE WHEN priority = 'low' THEN 1 END) as low_priority_complaints,
+        ROUND(AVG(CASE 
+          WHEN status = 'resolved' AND resolved_at IS NOT NULL 
+          THEN EXTRACT(epoch FROM (resolved_at - created_at)) / 86400.0 
+        END), 2) as avg_resolution_days
       FROM complaints 
       WHERE user_id = $1 AND is_active = true
     `, [userId]);
     
-    // 계정 정보
+    // 카테고리별 민원 통계
+    const categoryResult = await query(`
+      SELECT 
+        category,
+        COUNT(*) as count,
+        COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_count
+      FROM complaints 
+      WHERE user_id = $1 AND is_active = true
+      GROUP BY category
+      ORDER BY count DESC
+    `, [userId]);
+    
+    // 월별 민원 제출 통계 (최근 12개월)
+    const monthlyResult = await query(`
+      SELECT 
+        TO_CHAR(created_at, 'YYYY-MM') as month,
+        COUNT(*) as count
+      FROM complaints 
+      WHERE user_id = $1 AND is_active = true
+        AND created_at >= NOW() - INTERVAL '12 months'
+      GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+      ORDER BY month DESC
+    `, [userId]);
+    
+    // 방문 예약 통계
+    const visitResult = await query(`
+      SELECT 
+        COUNT(*) as total_visits,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_visits,
+        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_visits,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_visits,
+        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_visits,
+        COUNT(CASE WHEN created_at >= NOW() - INTERVAL '${period} days' THEN 1 END) as recent_visits
+      FROM visits 
+      WHERE user_id = $1
+    `, [userId]);
+    
+    // 계정 정보 및 활동 지표
     const userResult = await query(`
       SELECT 
         created_at,
         EXTRACT(day FROM AGE(CURRENT_DATE, created_at::date)) as days_since_registration,
         email_verified,
-        last_login_at
+        last_login_at,
+        profile_image IS NOT NULL as has_profile_image,
+        email_notifications,
+        sms_notifications,
+        language,
+        timezone
       FROM users 
       WHERE id = $1
     `, [userId]);
     
     const userInfo = userResult.rows[0];
     const complaintStats = complaintResult.rows[0];
+    const visitStats = visitResult.rows[0];
+    
+    // 활동 점수 계산 (간단한 알고리즘)
+    const activityScore = Math.min(100, 
+      (parseInt(complaintStats.total_complaints) * 5) + 
+      (parseInt(visitStats.completed_visits) * 3) +
+      (userInfo.has_profile_image ? 10 : 0) +
+      (userInfo.email_verified ? 15 : 0)
+    );
+    
+    // 해결률 계산
+    const resolutionRate = complaintStats.total_complaints > 0 ? 
+      Math.round((complaintStats.resolved_complaints / complaintStats.total_complaints) * 100) : 0;
     
     res.json({
       success: true,
@@ -562,7 +634,15 @@ const getUserStats = async (req, res) => {
           account: {
             days_since_registration: Math.floor(userInfo?.days_since_registration || 0),
             email_verified: userInfo?.email_verified || false,
-            last_login: userInfo?.last_login_at
+            last_login: userInfo?.last_login_at,
+            has_profile_image: userInfo?.has_profile_image || false,
+            activity_score: activityScore,
+            profile_completion: Math.round((
+              (userInfo?.has_profile_image ? 25 : 0) +
+              (userInfo?.email_verified ? 35 : 0) +
+              (userInfo?.email_notifications !== null ? 20 : 0) +
+              (userInfo?.language ? 20 : 0)
+            ))
           },
           complaints: {
             total_complaints: parseInt(complaintStats.total_complaints) || 0,
@@ -570,7 +650,38 @@ const getUserStats = async (req, res) => {
             in_progress_complaints: parseInt(complaintStats.in_progress_complaints) || 0,
             resolved_complaints: parseInt(complaintStats.resolved_complaints) || 0,
             closed_complaints: parseInt(complaintStats.closed_complaints) || 0,
-            recent_complaints: parseInt(complaintStats.recent_complaints) || 0
+            recent_complaints: parseInt(complaintStats.recent_complaints) || 0,
+            resolution_rate: resolutionRate,
+            avg_resolution_days: parseFloat(complaintStats.avg_resolution_days) || 0,
+            priority_distribution: {
+              high: parseInt(complaintStats.high_priority_complaints) || 0,
+              medium: parseInt(complaintStats.medium_priority_complaints) || 0,
+              low: parseInt(complaintStats.low_priority_complaints) || 0
+            },
+            category_breakdown: categoryResult.rows.map(row => ({
+              category: row.category,
+              count: parseInt(row.count),
+              resolved_count: parseInt(row.resolved_count),
+              resolution_rate: row.count > 0 ? Math.round((row.resolved_count / row.count) * 100) : 0
+            })),
+            monthly_trend: monthlyResult.rows.map(row => ({
+              month: row.month,
+              count: parseInt(row.count)
+            }))
+          },
+          visits: {
+            total_visits: parseInt(visitStats.total_visits) || 0,
+            pending_visits: parseInt(visitStats.pending_visits) || 0,
+            approved_visits: parseInt(visitStats.approved_visits) || 0,
+            completed_visits: parseInt(visitStats.completed_visits) || 0,
+            cancelled_visits: parseInt(visitStats.cancelled_visits) || 0,
+            recent_visits: parseInt(visitStats.recent_visits) || 0,
+            completion_rate: visitStats.total_visits > 0 ? 
+              Math.round((visitStats.completed_visits / visitStats.total_visits) * 100) : 0
+          },
+          period_info: {
+            period_days: parseInt(period),
+            generated_at: new Date().toISOString()
           }
         }
       }
@@ -586,7 +697,7 @@ const getUserStats = async (req, res) => {
 };
 
 /**
- * 📷 프로필 이미지 업로드
+ * 📷 프로필 이미지 업로드 (향상된 버전)
  * @route POST /api/users/upload-avatar
  */
 const uploadAvatar = async (req, res) => {
@@ -600,20 +711,61 @@ const uploadAvatar = async (req, res) => {
       });
     }
     
+    // 파일 정보 검증
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      // 잘못된 파일 타입인 경우 업로드된 파일 삭제
+      try {
+        await fs.unlink(req.file.path);
+      } catch (err) {
+        console.error('잘못된 파일 삭제 실패:', err);
+      }
+      
+      return res.status(400).json({
+        success: false,
+        message: '지원하지 않는 파일 형식입니다. JPEG, PNG, GIF 파일만 업로드 가능합니다.'
+      });
+    }
+    
+    // 파일 크기 검증 (5MB 제한)
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (req.file.size > maxSize) {
+      try {
+        await fs.unlink(req.file.path);
+      } catch (err) {
+        console.error('큰 파일 삭제 실패:', err);
+      }
+      
+      return res.status(400).json({
+        success: false,
+        message: '파일 크기가 너무 큽니다. 5MB 이하의 파일만 업로드 가능합니다.'
+      });
+    }
+    
     const avatarPath = `/uploads/avatars/${req.file.filename}`;
     
-    // 기존 프로필 이미지 삭제 (선택사항)
+    // 현재 사용자의 프로필 이미지 정보 조회
     const currentUserResult = await query(
       'SELECT profile_image FROM users WHERE id = $1',
       [userId]
     );
     
-    if (currentUserResult.rows[0]?.profile_image) {
-      const oldImagePath = path.join(__dirname, '../../', currentUserResult.rows[0].profile_image);
+    if (currentUserResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+    
+    // 기존 프로필 이미지 삭제 (있는 경우)
+    const oldProfileImage = currentUserResult.rows[0]?.profile_image;
+    if (oldProfileImage) {
+      const oldImagePath = path.join(__dirname, '../../', oldProfileImage);
       try {
         await fs.unlink(oldImagePath);
+        console.log('기존 프로필 이미지 삭제 완료:', oldImagePath);
       } catch (err) {
-        // 기존 파일 삭제 실패는 무시
+        // 기존 파일 삭제 실패는 무시 (파일이 없을 수 있음)
         console.log('기존 프로필 이미지 삭제 실패:', err.message);
       }
     }
@@ -624,11 +776,22 @@ const uploadAvatar = async (req, res) => {
       [avatarPath, userId]
     );
     
+    // 이미지 메타데이터 생성
+    const imageMetadata = {
+      filename: req.file.filename,
+      original_name: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      uploaded_at: new Date().toISOString()
+    };
+    
     res.json({
       success: true,
       message: '프로필 이미지가 성공적으로 업로드되었습니다.',
       data: {
-        profile_image: avatarPath
+        profile_image: avatarPath,
+        metadata: imageMetadata,
+        previous_image_deleted: !!oldProfileImage
       }
     });
 
@@ -639,6 +802,7 @@ const uploadAvatar = async (req, res) => {
     if (req.file) {
       try {
         await fs.unlink(req.file.path);
+        console.log('오류로 인한 파일 삭제 완료:', req.file.path);
       } catch (err) {
         console.error('임시 파일 삭제 실패:', err);
       }
