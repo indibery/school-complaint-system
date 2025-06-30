@@ -9,6 +9,9 @@ const { v4: uuidv4 } = require('uuid');
 
 // 라우터 임포트
 const complaintRoutes = require('../../routes/complaints');
+const adminRoutes = require('../../routes/admin');
+const userRoutes = require('../../routes/users');
+const authRoutes = require('../../routes/auth');
 
 // 테스트 환경용 Express 앱 생성
 function createTestApp() {
@@ -21,11 +24,11 @@ function createTestApp() {
   app.use(bodyParser.json({ limit: '10mb' }));
   app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-  // 모킹된 인증 라우터
-  setupMockedAuthRoutes(app);
-
-  // 민원 라우터 연결
+  // 라우터 연결
+  app.use('/api/auth', authRoutes);
   app.use('/api/complaints', complaintRoutes);
+  app.use('/api/admin', adminRoutes);
+  app.use('/api/users', userRoutes);
 
   // 헬스체크 엔드포인트
   app.get('/health', (req, res) => {
