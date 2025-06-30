@@ -143,7 +143,15 @@ router.put('/settings',
     body('timezone')
       .optional()
       .isIn(['Asia/Seoul', 'UTC'])
-      .withMessage('시간대 설정이 올바르지 않습니다.')
+      .withMessage('시간대 설정이 올바르지 않습니다.'),
+    body('privacy_level')
+      .optional()
+      .isIn(['public', 'private', 'friends'])
+      .withMessage('개인정보 보호 수준은 public, private, friends 중 하나여야 합니다.'),
+    body('two_factor_enabled')
+      .optional()
+      .isBoolean()
+      .withMessage('2단계 인증 설정은 true/false 값이어야 합니다.')
   ],
   handleValidationErrors,
   userController.updateSettings

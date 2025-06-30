@@ -252,37 +252,78 @@ const changePassword = async (req, res) => {
 };
 
 /**
- * ⚙️ 계정 설정 변경
+ * ⚙️ 계정 설정 변경 (향상된 버전)
  * @route PUT /api/users/settings
  */
 const updateSettings = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { email_notifications, sms_notifications, language, timezone } = req.body;
+    const { 
+      email_notifications, 
+      sms_notifications, 
+      language, 
+      timezone,
+      privacy_level,
+      two_factor_enabled 
+    } = req.body;
+    
+    // 현재 사용자 설정 조회
+    const currentUserResult = await query(
+      `SELECT email_notifications, sms_notifications, language, timezone, 
+              privacy_level, two_factor_enabled 
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+    
+    if (currentUserResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+    
+    const currentSettings = currentUserResult.rows[0];
     
     // 설정 필드만 동적 쿼리 생성
     const updates = [];
     const values = [];
+    const changes = [];
     let paramIndex = 1;
     
-    if (email_notifications !== undefined) {
+    if (email_notifications !== undefined && email_notifications !== currentSettings.email_notifications) {
       updates.push(`email_notifications = $${paramIndex++}`);
       values.push(email_notifications);
+      changes.push(`이메일 알림: ${email_notifications ? '활성화' : '비활성화'}`);
     }
     
-    if (sms_notifications !== undefined) {
+    if (sms_notifications !== undefined && sms_notifications !== currentSettings.sms_notifications) {
       updates.push(`sms_notifications = $${paramIndex++}`);
       values.push(sms_notifications);
+      changes.push(`SMS 알림: ${sms_notifications ? '활성화' : '비활성화'}`);
     }
     
-    if (language !== undefined) {
+    if (language !== undefined && language !== currentSettings.language) {
       updates.push(`language = $${paramIndex++}`);
       values.push(language);
+      changes.push(`언어: ${language}`);
     }
     
-    if (timezone !== undefined) {
+    if (timezone !== undefined && timezone !== currentSettings.timezone) {
       updates.push(`timezone = $${paramIndex++}`);
       values.push(timezone);
+      changes.push(`시간대: ${timezone}`);
+    }
+    
+    if (privacy_level !== undefined && privacy_level !== currentSettings.privacy_level) {
+      updates.push(`privacy_level = $${paramIndex++}`);
+      values.push(privacy_level);
+      changes.push(`개인정보 보호 수준: ${privacy_level}`);
+    }
+    
+    if (two_factor_enabled !== undefined && two_factor_enabled !== currentSettings.two_factor_enabled) {
+      updates.push(`two_factor_enabled = $${paramIndex++}`);
+      values.push(two_factor_enabled);
+      changes.push(`2단계 인증: ${two_factor_enabled ? '활성화' : '비활성화'}`);
     }
     
     if (updates.length === 0) {
@@ -299,9 +340,21 @@ const updateSettings = async (req, res) => {
     
     await query(updateQuery, values);
     
+    // 변경된 설정 조회
+    const updatedSettingsResult = await query(
+      `SELECT email_notifications, sms_notifications, language, timezone, 
+              privacy_level, two_factor_enabled, updated_at
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+    
     res.json({
       success: true,
-      message: '계정 설정이 성공적으로 변경되었습니다.'
+      message: '계정 설정이 성공적으로 변경되었습니다.',
+      data: {
+        settings: updatedSettingsResult.rows[0],
+        changes: changes
+      }
     });
 
   } catch (error) {
@@ -314,17 +367,27 @@ const updateSettings = async (req, res) => {
 };
 
 /**
- * 🗑️ 계정 삭제
+ * 🗑️ 계정 삭제 (향상된 안전 버전)
  * @route DELETE /api/users/account
  */
 const deleteAccount = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { password } = req.body;
+    const { password, confirmation } = req.body;
     
-    // 비밀번호 확인
+    // 필수 확인 문구 검증
+    if (confirmation !== 'DELETE_MY_ACCOUNT') {
+      return res.status(400).json({
+        success: false,
+        message: '계정 삭제를 확인하기 위해 "DELETE_MY_ACCOUNT"를 정확히 입력해주세요.'
+      });
+    }
+    
+    // 사용자 정보 및 보안 상태 확인
     const userResult = await query(
-      'SELECT password_hash FROM users WHERE id = $1',
+      `SELECT password_hash, email, name, role, created_at,
+              (SELECT COUNT(*) FROM complaints WHERE user_id = $1 AND is_active = true) as active_complaints
+       FROM users WHERE id = $1`,
       [userId]
     );
     
@@ -335,7 +398,18 @@ const deleteAccount = async (req, res) => {
       });
     }
     
-    const isPasswordValid = await bcrypt.compare(password, userResult.rows[0].password_hash);
+    const user = userResult.rows[0];
+    
+    // 관리자 계정 삭제 방지
+    if (user.role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: '관리자 계정은 직접 삭제할 수 없습니다. 시스템 관리자에게 문의하세요.'
+      });
+    }
+    
+    // 비밀번호 확인
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     
     if (!isPasswordValid) {
       return res.status(400).json({
@@ -344,33 +418,90 @@ const deleteAccount = async (req, res) => {
       });
     }
     
-    // 트랜잭션으로 처리
+    // 계정 생성 후 24시간 이내 삭제 방지 (오작동 방지)
+    const accountAge = new Date() - new Date(user.created_at);
+    const hoursSinceCreation = accountAge / (1000 * 60 * 60);
+    
+    if (hoursSinceCreation < 24) {
+      return res.status(429).json({
+        success: false,
+        message: '계정 생성 후 24시간이 지나야 삭제할 수 있습니다.'
+      });
+    }
+    
+    // 트랜잭션으로 안전하게 처리
     const client = await pool.connect();
     
     try {
       await client.query('BEGIN');
       
-      // 관련 데이터 삭제 (soft delete 방식)
+      const deletedTimestamp = Math.floor(Date.now() / 1000);
+      
+      // 1. 사용자 계정 비활성화 (Soft Delete)
       await client.query(
         `UPDATE users 
          SET is_active = false, 
-             email = email || '_deleted_' || EXTRACT(epoch FROM NOW())::text, 
-             updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $1`,
-        [userId]
+             email = $1, 
+             name = 'Deleted User',
+             phone = NULL,
+             profile_image = NULL,
+             email_notifications = false,
+             sms_notifications = false,
+             updated_at = CURRENT_TIMESTAMP,
+             deleted_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [
+          `deleted_user_${userId}_${deletedTimestamp}@deleted.local`,
+          userId
+        ]
       );
       
-      // 사용자의 민원도 비활성화
+      // 2. 관련 데이터 처리
+      // 민원 비활성화
       await client.query(
         'UPDATE complaints SET is_active = false WHERE user_id = $1',
         [userId]
+      );
+      
+      // 방문 예약 취소
+      await client.query(
+        `UPDATE visits 
+         SET status = 'cancelled', 
+             cancellation_reason = '계정 삭제로 인한 자동 취소'
+         WHERE user_id = $1 AND status IN ('pending', 'approved')`,
+        [userId]
+      );
+      
+      // 토큰 무효화 (모든 세션 종료)
+      await client.query(
+        'UPDATE users SET token_version = token_version + 1 WHERE id = $1',
+        [userId]
+      );
+      
+      // 3. 계정 삭제 로그 기록
+      await client.query(
+        `INSERT INTO account_deletion_logs 
+         (user_id, email, name, role, deleted_at, ip_address, user_agent)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5, $6)`,
+        [
+          userId,
+          user.email,
+          user.name,
+          user.role,
+          req.ip || req.connection.remoteAddress || 'unknown',
+          req.get('User-Agent') || 'unknown'
+        ]
       );
       
       await client.query('COMMIT');
       
       res.json({
         success: true,
-        message: '계정이 성공적으로 삭제되었습니다.'
+        message: '계정이 성공적으로 삭제되었습니다. 그동안 서비스를 이용해 주셔서 감사합니다.',
+        data: {
+          deleted_at: new Date().toISOString(),
+          data_retention_info: '개인정보는 법적 보관 기간에 따라 처리됩니다.'
+        }
       });
       
     } catch (error) {
