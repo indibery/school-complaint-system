@@ -8,6 +8,9 @@ const express = require('express');
 const { authenticateToken, requireTeacher, requireAdmin } = require('../middleware/auth');
 const { 
   validateComplaintCreation, 
+  validateComplaintUpdate,
+  validateComplaintStatusUpdate,
+  validateComplaintComment,
   validateIdParam, 
   validatePagination,
   validateSearch
@@ -57,7 +60,8 @@ router.get('/:id',
  */
 router.put('/:id', 
   authenticateToken, 
-  validateIdParam, 
+  validateIdParam,
+  validateComplaintUpdate, 
   complaintController.updateComplaint
 );
 
@@ -73,14 +77,15 @@ router.delete('/:id',
 );
 
 /**
- * @route   PUT /api/complaints/:id/status
+ * @route   PATCH /api/complaints/:id/status
  * @desc    민원 상태 변경 (교사/관리자만)
  * @access  Private (Teacher+)
  */
-router.put('/:id/status', 
+router.patch('/:id/status', 
   authenticateToken, 
   requireTeacher,
-  validateIdParam, 
+  validateIdParam,
+  validateComplaintStatusUpdate, 
   complaintController.updateComplaintStatus
 );
 
@@ -92,7 +97,8 @@ router.put('/:id/status',
 router.post('/:id/comment', 
   authenticateToken, 
   requireTeacher,
-  validateIdParam, 
+  validateIdParam,
+  validateComplaintComment,
   complaintController.addComplaintComment
 );
 

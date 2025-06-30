@@ -53,6 +53,31 @@ async function createTestUser(userData = {}) {
 }
 
 /**
+ * 테스트용 민원 생성 헬퍼
+ */
+async function createTestComplaint(complaintData = {}) {
+  const defaultData = {
+    user_id: 1,
+    title: `테스트 민원 ${uuidv4().substring(0, 8)}`,
+    description: '테스트용 민원 설명입니다.',
+    category: 'meal',
+    priority: 'medium',
+    status: 'submitted',
+    anonymous: false
+  };
+
+  const complaint = { ...defaultData, ...complaintData };
+  
+  const result = await global.testPool.query(
+    `INSERT INTO complaints (user_id, title, description, category, priority, status, anonymous) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [complaint.user_id, complaint.title, complaint.description, complaint.category, complaint.priority, complaint.status, complaint.anonymous]
+  );
+
+  return result.rows[0];
+}
+
+/**
  * 여러 테스트 사용자 생성
  */
 async function createMultipleTestUsers(count = 3) {
@@ -214,6 +239,34 @@ const dbHelpers = {
   async getUsersCount() {
     const result = await global.testPool.query('SELECT COUNT(*) FROM users');
     return parseInt(result.rows[0].count);
+  },
+
+  async getComplaintById(id) {
+    const result = await global.testPool.query('SELECT * FROM complaints WHERE id = $1', [id]);
+    return result.rows[0];
+  },
+
+  async getComplaintsCount() {
+    const result = await global.testPool.query('SELECT COUNT(*) FROM complaints');
+    return parseInt(result.rows[0].count);
+  },
+
+  async cleanup() {
+    // 테스트 후 정리 작업
+    try {
+      await global.testPool.query('DELETE FROM complaint_comments');
+      await global.testPool.query('DELETE FROM complaint_attachments');
+      await global.testPool.query('DELETE FROM complaint_history');
+      await global.testPool.query('DELETE FROM complaints');
+      await global.testPool.query('DELETE FROM token_blacklist');
+      await global.testPool.query('DELETE FROM users WHERE email LIKE \'%test%\'');
+      
+      // 시퀀스 리셋
+      await global.testPool.query('ALTER SEQUENCE users_id_seq RESTART WITH 1');
+      await global.testPool.query('ALTER SEQUENCE complaints_id_seq RESTART WITH 1');
+    } catch (error) {
+      console.error('Cleanup error:', error);
+    }
   }
 };
 
@@ -240,6 +293,7 @@ const timeHelpers = {
 
 module.exports = {
   createTestUser,
+  createTestComplaint,
   createMultipleTestUsers,
   generateTestTokens,
   createAuthHeader,

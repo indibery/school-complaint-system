@@ -93,12 +93,12 @@ const validateComplaintCreation = [
     .withMessage('내용은 10-2000자 사이여야 합니다.'),
   
   body('category')
-    .isIn(['facility', 'meal', 'safety', 'education', 'other'])
+    .isIn(['facility', 'meal', 'safety', 'education', 'administration', 'bullying', 'academic', 'other'])
     .withMessage('유효한 카테고리를 선택해주세요.'),
   
   body('priority')
     .optional()
-    .isIn(['low', 'medium', 'high', 'urgent'])
+    .isIn(['low', 'medium', 'high'])
     .withMessage('유효한 우선순위를 선택해주세요.'),
   
   body('anonymous')
@@ -233,7 +233,7 @@ const validatePagination = [
  */
 const validateIdParam = [
   param('id')
-    .isUUID()
+    .isInt({ min: 1 })
     .withMessage('유효한 ID 형식이 아닙니다.'),
   
   handleValidationErrors
@@ -251,12 +251,12 @@ const validateSearch = [
   
   query('category')
     .optional()
-    .isIn(['facility', 'meal', 'safety', 'education', 'other'])
+    .isIn(['facility', 'meal', 'safety', 'education', 'administration', 'bullying', 'academic', 'other'])
     .withMessage('유효한 카테고리를 선택해주세요.'),
   
   query('status')
     .optional()
-    .isIn(['pending', 'in_progress', 'resolved', 'closed'])
+    .isIn(['submitted', 'in_progress', 'resolved', 'closed'])
     .withMessage('유효한 상태를 선택해주세요.'),
   
   handleValidationErrors
@@ -355,11 +355,87 @@ const validateDateRange = [
   handleValidationErrors
 ];
 
+/**
+ * 민원 수정 유효성 검증
+ */
+const validateComplaintUpdate = [
+  body('title')
+    .optional()
+    .trim()
+    .isLength({ min: 5, max: 200 })
+    .withMessage('제목은 5-200자 사이여야 합니다.'),
+  
+  body('description')
+    .optional()
+    .trim()
+    .isLength({ min: 10, max: 2000 })
+    .withMessage('내용은 10-2000자 사이여야 합니다.'),
+  
+  body('category')
+    .optional()
+    .isIn(['facility', 'meal', 'safety', 'education', 'administration', 'bullying', 'academic', 'other'])
+    .withMessage('유효한 카테고리를 선택해주세요.'),
+  
+  body('priority')
+    .optional()
+    .isIn(['low', 'medium', 'high'])
+    .withMessage('유효한 우선순위를 선택해주세요.'),
+  
+  body('anonymous')
+    .optional()
+    .isBoolean()
+    .withMessage('익명 여부는 true/false여야 합니다.'),
+  
+  handleValidationErrors
+];
+
+/**
+ * 민원 상태 변경 유효성 검증
+ */
+const validateComplaintStatusUpdate = [
+  body('status')
+    .isIn(['submitted', 'in_progress', 'resolved', 'closed'])
+    .withMessage('유효한 상태를 선택해주세요.'),
+  
+  body('assigned_to')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('유효한 담당자 ID를 입력해주세요.'),
+  
+  body('response')
+    .optional()
+    .trim()
+    .isLength({ max: 2000 })
+    .withMessage('응답 내용은 2000자를 초과할 수 없습니다.'),
+  
+  handleValidationErrors
+];
+
+/**
+ * 민원 댓글 추가 유효성 검증
+ */
+const validateComplaintComment = [
+  body('content')
+    .trim()
+    .isLength({ min: 1, max: 1000 })
+    .withMessage('댓글 내용은 1-1000자 사이여야 합니다.'),
+  
+  body('is_internal')
+    .optional()
+    .isBoolean()
+    .withMessage('내부 댓글 여부는 true/false여야 합니다.'),
+  
+  handleValidationErrors
+];
+
 module.exports = {
   handleValidationErrors,
   validateUserRegistration,
   validateLogin,
   validateComplaintCreation,
+  validateComplaintUpdate,
+  validateComplaintStatusUpdate,
+  validateComplaintComment,
   validateVisitReservation,
   validateUserUpdate,
   validatePasswordChange,
