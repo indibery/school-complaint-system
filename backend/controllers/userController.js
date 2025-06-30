@@ -4,8 +4,8 @@
  * @description 사용자 프로필, 설정, 통계 관련 비즈니스 로직
  */
 
-const db = require('../utils/database');
-const bcrypt = require('bcrypt');
+const { pool, query } = require('../utils/database');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs').promises;
 const path = require('path');
@@ -19,23 +19,23 @@ const getProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     
-    const [rows] = await db.execute(
+    const result = await query(
       `SELECT id, email, name, phone, role, is_active, email_verified, 
               profile_image, created_at, updated_at,
               email_notifications, sms_notifications, language, timezone
        FROM users 
-       WHERE id = ?`,
+       WHERE id = $1`,
       [userId]
     );
 
-    if (rows.length === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
       });
     }
 
-    const user = rows[0];
+    const user = result.rows[0];
     
     // 비밀번호 해시는 제외하고 반환
     delete user.password_hash;
@@ -68,14 +68,15 @@ const updateProfile = async (req, res) => {
     // 수정할 필드만 동적 쿼리 생성
     const updates = [];
     const values = [];
+    let paramIndex = 1;
     
     if (name !== undefined) {
-      updates.push('name = ?');
+      updates.push(`name = $${paramIndex++}`);
       values.push(name);
     }
     
     if (phone !== undefined) {
-      updates.push('phone = ?');
+      updates.push(`phone = $${paramIndex++}`);
       values.push(phone);
     }
     
@@ -86,17 +87,17 @@ const updateProfile = async (req, res) => {
       });
     }
     
-    updates.push('updated_at = CURRENT_TIMESTAMP');
+    updates.push(`updated_at = CURRENT_TIMESTAMP`);
     values.push(userId);
     
-    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+    const updateQuery = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
     
-    await db.execute(query, values);
+    await query(updateQuery, values);
     
     // 수정된 프로필 조회
-    const [rows] = await db.execute(
+    const result = await query(
       `SELECT id, email, name, phone, role, profile_image, updated_at
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [userId]
     );
     
@@ -104,7 +105,7 @@ const updateProfile = async (req, res) => {
       success: true,
       message: '프로필이 성공적으로 수정되었습니다.',
       data: {
-        user: rows[0]
+        user: result.rows[0]
       }
     });
 
@@ -127,19 +128,19 @@ const changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     
     // 현재 비밀번호 확인
-    const [users] = await db.execute(
-      'SELECT password_hash FROM users WHERE id = ?',
+    const userResult = await query(
+      'SELECT password_hash FROM users WHERE id = $1',
       [userId]
     );
     
-    if (users.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
       });
     }
     
-    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, users[0].password_hash);
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, userResult.rows[0].password_hash);
     
     if (!isCurrentPasswordValid) {
       return res.status(400).json({
@@ -153,8 +154,8 @@ const changePassword = async (req, res) => {
     const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
     
     // 비밀번호 업데이트
-    await db.execute(
-      'UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    await query(
+      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [newPasswordHash, userId]
     );
     
@@ -181,27 +182,28 @@ const updateSettings = async (req, res) => {
     const userId = req.user.id;
     const { email_notifications, sms_notifications, language, timezone } = req.body;
     
-    // 설정 테이블이 없으면 users 테이블에 컬럼 추가 방식 사용
+    // 설정 필드만 동적 쿼리 생성
     const updates = [];
     const values = [];
+    let paramIndex = 1;
     
     if (email_notifications !== undefined) {
-      updates.push('email_notifications = ?');
+      updates.push(`email_notifications = $${paramIndex++}`);
       values.push(email_notifications);
     }
     
     if (sms_notifications !== undefined) {
-      updates.push('sms_notifications = ?');
+      updates.push(`sms_notifications = $${paramIndex++}`);
       values.push(sms_notifications);
     }
     
     if (language !== undefined) {
-      updates.push('language = ?');
+      updates.push(`language = $${paramIndex++}`);
       values.push(language);
     }
     
     if (timezone !== undefined) {
-      updates.push('timezone = ?');
+      updates.push(`timezone = $${paramIndex++}`);
       values.push(timezone);
     }
     
@@ -215,9 +217,9 @@ const updateSettings = async (req, res) => {
     updates.push('updated_at = CURRENT_TIMESTAMP');
     values.push(userId);
     
-    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+    const updateQuery = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
     
-    await db.execute(query, values);
+    await query(updateQuery, values);
     
     res.json({
       success: true,
@@ -243,19 +245,19 @@ const deleteAccount = async (req, res) => {
     const { password } = req.body;
     
     // 비밀번호 확인
-    const [users] = await db.execute(
-      'SELECT password_hash FROM users WHERE id = ?',
+    const userResult = await query(
+      'SELECT password_hash FROM users WHERE id = $1',
       [userId]
     );
     
-    if (users.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
       });
     }
     
-    const isPasswordValid = await bcrypt.compare(password, users[0].password_hash);
+    const isPasswordValid = await bcrypt.compare(password, userResult.rows[0].password_hash);
     
     if (!isPasswordValid) {
       return res.status(400).json({
@@ -264,23 +266,29 @@ const deleteAccount = async (req, res) => {
       });
     }
     
-    // 트랜잭션 시작
-    await db.execute('START TRANSACTION');
+    // 트랜잭션으로 처리
+    const client = await pool.connect();
     
     try {
+      await client.query('BEGIN');
+      
       // 관련 데이터 삭제 (soft delete 방식)
-      await db.execute(
-        'UPDATE users SET is_active = 0, email = CONCAT(email, "_deleted_", UNIX_TIMESTAMP()), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      await client.query(
+        `UPDATE users 
+         SET is_active = false, 
+             email = email || '_deleted_' || EXTRACT(epoch FROM NOW())::text, 
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $1`,
         [userId]
       );
       
       // 사용자의 민원도 비활성화
-      await db.execute(
-        'UPDATE complaints SET is_active = 0 WHERE user_id = ?',
+      await client.query(
+        'UPDATE complaints SET is_active = false WHERE user_id = $1',
         [userId]
       );
       
-      await db.execute('COMMIT');
+      await client.query('COMMIT');
       
       res.json({
         success: true,
@@ -288,8 +296,10 @@ const deleteAccount = async (req, res) => {
       });
       
     } catch (error) {
-      await db.execute('ROLLBACK');
+      await client.query('ROLLBACK');
       throw error;
+    } finally {
+      client.release();
     }
 
   } catch (error) {
@@ -310,45 +320,48 @@ const getUserStats = async (req, res) => {
     const userId = req.user.id;
     
     // 사용자의 민원 통계
-    const [complaintStats] = await db.execute(`
+    const complaintResult = await query(`
       SELECT 
         COUNT(*) as total_complaints,
         COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_complaints,
         COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_complaints,
         COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_complaints,
         COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_complaints,
-        COUNT(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as recent_complaints
+        COUNT(CASE WHEN created_at >= NOW() - INTERVAL '30 days' THEN 1 END) as recent_complaints
       FROM complaints 
-      WHERE user_id = ? AND is_active = 1
+      WHERE user_id = $1 AND is_active = true
     `, [userId]);
     
     // 계정 정보
-    const [userInfo] = await db.execute(`
+    const userResult = await query(`
       SELECT 
         created_at,
-        DATEDIFF(CURRENT_DATE, created_at) as days_since_registration,
+        EXTRACT(day FROM AGE(CURRENT_DATE, created_at::date)) as days_since_registration,
         email_verified,
         last_login_at
       FROM users 
-      WHERE id = ?
+      WHERE id = $1
     `, [userId]);
+    
+    const userInfo = userResult.rows[0];
+    const complaintStats = complaintResult.rows[0];
     
     res.json({
       success: true,
       data: {
         user_stats: {
           account: {
-            days_since_registration: userInfo[0]?.days_since_registration || 0,
-            email_verified: userInfo[0]?.email_verified || false,
-            last_login: userInfo[0]?.last_login_at
+            days_since_registration: Math.floor(userInfo?.days_since_registration || 0),
+            email_verified: userInfo?.email_verified || false,
+            last_login: userInfo?.last_login_at
           },
-          complaints: complaintStats[0] || {
-            total_complaints: 0,
-            pending_complaints: 0,
-            in_progress_complaints: 0,
-            resolved_complaints: 0,
-            closed_complaints: 0,
-            recent_complaints: 0
+          complaints: {
+            total_complaints: parseInt(complaintStats.total_complaints) || 0,
+            pending_complaints: parseInt(complaintStats.pending_complaints) || 0,
+            in_progress_complaints: parseInt(complaintStats.in_progress_complaints) || 0,
+            resolved_complaints: parseInt(complaintStats.resolved_complaints) || 0,
+            closed_complaints: parseInt(complaintStats.closed_complaints) || 0,
+            recent_complaints: parseInt(complaintStats.recent_complaints) || 0
           }
         }
       }
@@ -381,13 +394,13 @@ const uploadAvatar = async (req, res) => {
     const avatarPath = `/uploads/avatars/${req.file.filename}`;
     
     // 기존 프로필 이미지 삭제 (선택사항)
-    const [currentUser] = await db.execute(
-      'SELECT profile_image FROM users WHERE id = ?',
+    const currentUserResult = await query(
+      'SELECT profile_image FROM users WHERE id = $1',
       [userId]
     );
     
-    if (currentUser[0]?.profile_image) {
-      const oldImagePath = path.join(__dirname, '../../', currentUser[0].profile_image);
+    if (currentUserResult.rows[0]?.profile_image) {
+      const oldImagePath = path.join(__dirname, '../../', currentUserResult.rows[0].profile_image);
       try {
         await fs.unlink(oldImagePath);
       } catch (err) {
@@ -397,8 +410,8 @@ const uploadAvatar = async (req, res) => {
     }
     
     // 데이터베이스 업데이트
-    await db.execute(
-      'UPDATE users SET profile_image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    await query(
+      'UPDATE users SET profile_image = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [avatarPath, userId]
     );
     
@@ -449,51 +462,54 @@ const getAllUsers = async (req, res) => {
     // 조건부 WHERE 절 구성
     let whereConditions = [];
     let queryParams = [];
+    let paramIndex = 1;
     
     if (search) {
-      whereConditions.push('(name LIKE ? OR email LIKE ?)');
+      whereConditions.push(`(name ILIKE $${paramIndex} OR email ILIKE $${paramIndex + 1})`);
       queryParams.push(`%${search}%`, `%${search}%`);
+      paramIndex += 2;
     }
     
     if (role) {
-      whereConditions.push('role = ?');
+      whereConditions.push(`role = $${paramIndex}`);
       queryParams.push(role);
+      paramIndex++;
     }
     
     if (status === 'active') {
-      whereConditions.push('is_active = 1');
+      whereConditions.push('is_active = true');
     } else if (status === 'inactive') {
-      whereConditions.push('is_active = 0');
+      whereConditions.push('is_active = false');
     }
     
     const whereClause = whereConditions.length > 0 ? 
       `WHERE ${whereConditions.join(' AND ')}` : '';
     
     // 총 사용자 수 조회
-    const [countResult] = await db.execute(
+    const countResult = await query(
       `SELECT COUNT(*) as total FROM users ${whereClause}`,
       queryParams
     );
     
     // 사용자 목록 조회
-    const [users] = await db.execute(`
+    const usersResult = await query(`
       SELECT 
         id, email, name, phone, role, is_active, email_verified, 
         profile_image, created_at, updated_at,
-        (SELECT COUNT(*) FROM complaints WHERE user_id = users.id AND is_active = 1) as complaint_count
+        (SELECT COUNT(*) FROM complaints WHERE user_id = users.id AND is_active = true) as complaint_count
       FROM users 
       ${whereClause}
       ORDER BY created_at DESC 
-      LIMIT ? OFFSET ?
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `, [...queryParams, limit, offset]);
     
-    const totalUsers = countResult[0].total;
+    const totalUsers = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(totalUsers / limit);
     
     res.json({
       success: true,
       data: {
-        users: users,
+        users: usersResult.rows,
         pagination: {
           current_page: page,
           total_pages: totalPages,
@@ -522,12 +538,12 @@ const updateUserById = async (req, res) => {
     const { name, email, role, is_active } = req.body;
     
     // 대상 사용자 존재 확인
-    const [existingUser] = await db.execute(
-      'SELECT id, email FROM users WHERE id = ?',
+    const existingUserResult = await query(
+      'SELECT id, email FROM users WHERE id = $1',
       [targetUserId]
     );
     
-    if (existingUser.length === 0) {
+    if (existingUserResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
@@ -535,13 +551,13 @@ const updateUserById = async (req, res) => {
     }
     
     // 이메일 중복 확인 (변경되는 경우)
-    if (email && email !== existingUser[0].email) {
-      const [emailCheck] = await db.execute(
-        'SELECT id FROM users WHERE email = ? AND id != ?',
+    if (email && email !== existingUserResult.rows[0].email) {
+      const emailCheckResult = await query(
+        'SELECT id FROM users WHERE email = $1 AND id != $2',
         [email, targetUserId]
       );
       
-      if (emailCheck.length > 0) {
+      if (emailCheckResult.rows.length > 0) {
         return res.status(400).json({
           success: false,
           message: '이미 사용 중인 이메일 주소입니다.'
@@ -552,24 +568,25 @@ const updateUserById = async (req, res) => {
     // 수정할 필드만 동적 쿼리 생성
     const updates = [];
     const values = [];
+    let paramIndex = 1;
     
     if (name !== undefined) {
-      updates.push('name = ?');
+      updates.push(`name = $${paramIndex++}`);
       values.push(name);
     }
     
     if (email !== undefined) {
-      updates.push('email = ?');
+      updates.push(`email = $${paramIndex++}`);
       values.push(email);
     }
     
     if (role !== undefined) {
-      updates.push('role = ?');
+      updates.push(`role = $${paramIndex++}`);
       values.push(role);
     }
     
     if (is_active !== undefined) {
-      updates.push('is_active = ?');
+      updates.push(`is_active = $${paramIndex++}`);
       values.push(is_active);
     }
     
@@ -583,22 +600,22 @@ const updateUserById = async (req, res) => {
     updates.push('updated_at = CURRENT_TIMESTAMP');
     values.push(targetUserId);
     
-    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+    const updateQuery = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
     
-    await db.execute(query, values);
+    await query(updateQuery, values);
     
     // 수정된 사용자 정보 조회
-    const [updatedUser] = await db.execute(`
+    const updatedUserResult = await query(`
       SELECT id, email, name, phone, role, is_active, email_verified, 
              profile_image, created_at, updated_at
-      FROM users WHERE id = ?
+      FROM users WHERE id = $1
     `, [targetUserId]);
     
     res.json({
       success: true,
       message: '사용자 정보가 성공적으로 수정되었습니다.',
       data: {
-        user: updatedUser[0]
+        user: updatedUserResult.rows[0]
       }
     });
 
@@ -629,47 +646,53 @@ const deleteUserById = async (req, res) => {
     }
     
     // 대상 사용자 존재 확인
-    const [existingUser] = await db.execute(
-      'SELECT id, name, email FROM users WHERE id = ?',
+    const existingUserResult = await query(
+      'SELECT id, name, email FROM users WHERE id = $1',
       [targetUserId]
     );
     
-    if (existingUser.length === 0) {
+    if (existingUserResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
       });
     }
     
-    // 트랜잭션 시작
-    await db.execute('START TRANSACTION');
+    const existingUser = existingUserResult.rows[0];
+    
+    // 트랜잭션으로 처리
+    const client = await pool.connect();
     
     try {
+      await client.query('BEGIN');
+      
       // Soft delete 방식으로 사용자 비활성화
-      await db.execute(`
+      await client.query(`
         UPDATE users 
-        SET is_active = 0, 
-            email = CONCAT(email, '_deleted_', UNIX_TIMESTAMP()), 
+        SET is_active = false, 
+            email = email || '_deleted_' || EXTRACT(epoch FROM NOW())::text, 
             updated_at = CURRENT_TIMESTAMP 
-        WHERE id = ?
+        WHERE id = $1
       `, [targetUserId]);
       
       // 사용자의 민원도 비활성화
-      await db.execute(
-        'UPDATE complaints SET is_active = 0 WHERE user_id = ?',
+      await client.query(
+        'UPDATE complaints SET is_active = false WHERE user_id = $1',
         [targetUserId]
       );
       
-      await db.execute('COMMIT');
+      await client.query('COMMIT');
       
       res.json({
         success: true,
-        message: `사용자 '${existingUser[0].name}'이 성공적으로 삭제되었습니다.`
+        message: `사용자 '${existingUser.name}'이 성공적으로 삭제되었습니다.`
       });
       
     } catch (error) {
-      await db.execute('ROLLBACK');
+      await client.query('ROLLBACK');
       throw error;
+    } finally {
+      client.release();
     }
 
   } catch (error) {
