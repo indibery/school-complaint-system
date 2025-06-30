@@ -83,31 +83,19 @@ Content-Type: application/json
 
 ---
 
-## 👥 사용자 API
+## 👥 사용자 관리 API
 
-### 내 프로필 조회
+> 📋 **상세 문서**: [사용자 관리 API 전체 문서](./API_USER_MANAGEMENT.md)
+
+### 일반 사용자 API
+
+#### 내 프로필 조회
 ```http
 GET /api/users/profile
 Authorization: Bearer <token>
 ```
 
-**응답:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "uuid",
-    "email": "user@example.com",
-    "name": "홍길동",
-    "phone": "010-1234-5678",
-    "role": "parent",
-    "profile_image": "https://...",
-    "created_at": "2025-01-01T00:00:00Z"
-  }
-}
-```
-
-### 프로필 수정
+#### 프로필 수정
 ```http
 PUT /api/users/profile
 Authorization: Bearer <token>
@@ -116,21 +104,93 @@ Content-Type: application/json
 {
   "name": "홍길동",
   "phone": "010-1234-5678",
-  "profile_image": "https://..."
+  "email_notifications": true,
+  "sms_notifications": false
 }
 ```
 
-### 비밀번호 변경
+#### 비밀번호 변경
 ```http
 PUT /api/users/password
 Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "currentPassword": "OldPass123!",
-  "newPassword": "NewPass123!",
-  "confirmPassword": "NewPass123!"
+  "current_password": "OldPass123!",
+  "new_password": "NewPass123!",
+  "confirm_password": "NewPass123!"
 }
+```
+
+#### 계정 설정 변경
+```http
+PUT /api/users/settings
+Authorization: Bearer <token>
+```
+
+#### 계정 삭제
+```http
+DELETE /api/users/account
+Authorization: Bearer <token>
+```
+
+#### 사용자 통계
+```http
+GET /api/users/stats
+Authorization: Bearer <token>
+```
+
+#### 프로필 이미지 업로드
+```http
+POST /api/users/upload-avatar
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+### 관리자 API
+
+> 🔒 **권한 필요**: `admin` 역할
+
+#### 전체 사용자 목록 조회
+```http
+GET /api/admin/users?page=1&limit=20&search=홍길동&role=parent&status=active
+Authorization: Bearer <admin_token>
+```
+
+#### 특정 사용자 조회
+```http
+GET /api/admin/users/:id
+Authorization: Bearer <admin_token>
+```
+
+#### 사용자 정보 수정
+```http
+PUT /api/admin/users/:id
+Authorization: Bearer <admin_token>
+```
+
+#### 사용자 삭제
+```http
+DELETE /api/admin/users/:id
+Authorization: Bearer <admin_token>
+```
+
+#### 비밀번호 초기화
+```http
+POST /api/admin/users/:id/reset-password
+Authorization: Bearer <admin_token>
+```
+
+#### 계정 잠금 해제
+```http
+POST /api/admin/users/:id/unlock
+Authorization: Bearer <admin_token>
+```
+
+#### 관리자 사용자 통계
+```http
+GET /api/admin/users/stats?period=30
+Authorization: Bearer <admin_token>
 ```
 
 ---
