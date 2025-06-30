@@ -820,17 +820,32 @@ const uploadAvatar = async (req, res) => {
 // =================================
 
 /**
- * 👥 모든 사용자 목록 조회 (관리자용)
+ * 👥 모든 사용자 목록 조회 (관리자용 향상 버전)
  * @route GET /api/users/admin/users
  */
 const getAllUsers = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100); // 최대 100개 제한
     const offset = (page - 1) * limit;
     const search = req.query.search || '';
     const role = req.query.role || '';
     const status = req.query.status || '';
+    const sortBy = req.query.sortBy || 'created_at';
+    const sortOrder = req.query.sortOrder || 'DESC';
+    const dateFrom = req.query.dateFrom || '';
+    const dateTo = req.query.dateTo || '';
+    
+    // 정렬 필드 검증
+    const validSortFields = ['created_at', 'updated_at', 'last_login_at', 'name', 'email'];
+    const validSortOrders = ['ASC', 'DESC'];
+    
+    if (!validSortFields.includes(sortBy) || !validSortOrders.includes(sortOrder.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        message: '유효하지 않은 정렬 옵션입니다.'
+      });
+    }
     
     // 조건부 WHERE 절 구성
     let whereConditions = [];
@@ -838,9 +853,13 @@ const getAllUsers = async (req, res) => {
     let paramIndex = 1;
     
     if (search) {
-      whereConditions.push(`(name ILIKE $${paramIndex} OR email ILIKE $${paramIndex + 1})`);
-      queryParams.push(`%${search}%`, `%${search}%`);
-      paramIndex += 2;
+      whereConditions.push(`(
+        name ILIKE $${paramIndex} OR 
+        email ILIKE $${paramIndex + 1} OR 
+        phone ILIKE $${paramIndex + 2}
+      )`);
+      queryParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      paramIndex += 3;
     }
     
     if (role) {
@@ -855,6 +874,19 @@ const getAllUsers = async (req, res) => {
       whereConditions.push('is_active = false');
     }
     
+    // 날짜 범위 필터
+    if (dateFrom) {
+      whereConditions.push(`created_at >= $${paramIndex}`);
+      queryParams.push(dateFrom);
+      paramIndex++;
+    }
+    
+    if (dateTo) {
+      whereConditions.push(`created_at <= $${paramIndex}`);
+      queryParams.push(dateTo + ' 23:59:59');
+      paramIndex++;
+    }
+    
     const whereClause = whereConditions.length > 0 ? 
       `WHERE ${whereConditions.join(' AND ')}` : '';
     
@@ -864,17 +896,39 @@ const getAllUsers = async (req, res) => {
       queryParams
     );
     
-    // 사용자 목록 조회
+    // 사용자 목록 조회 (향상된 정보 포함)
     const usersResult = await query(`
       SELECT 
-        id, email, name, phone, role, is_active, email_verified, 
-        profile_image, created_at, updated_at,
-        (SELECT COUNT(*) FROM complaints WHERE user_id = users.id AND is_active = true) as complaint_count
-      FROM users 
+        u.id, u.email, u.name, u.phone, u.role, u.is_active, u.email_verified, 
+        u.profile_image, u.created_at, u.updated_at, u.last_login_at,
+        u.email_notifications, u.sms_notifications, u.language, u.timezone,
+        (SELECT COUNT(*) FROM complaints WHERE user_id = u.id AND is_active = true) as complaint_count,
+        (SELECT COUNT(*) FROM visits WHERE user_id = u.id) as visit_count,
+        (SELECT MAX(created_at) FROM complaints WHERE user_id = u.id AND is_active = true) as last_complaint_at,
+        CASE 
+          WHEN u.last_login_at IS NULL THEN 'never'
+          WHEN u.last_login_at >= NOW() - INTERVAL '7 days' THEN 'recent'
+          WHEN u.last_login_at >= NOW() - INTERVAL '30 days' THEN 'active'
+          ELSE 'inactive'
+        END as activity_status
+      FROM users u
       ${whereClause}
-      ORDER BY created_at DESC 
+      ORDER BY ${sortBy} ${sortOrder.toUpperCase()}
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `, [...queryParams, limit, offset]);
+    
+    // 통계 정보 추가
+    const statsResult = await query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
+        COUNT(CASE WHEN email_verified = true THEN 1 END) as verified_users,
+        COUNT(CASE WHEN role = 'admin' THEN 1 END) as admin_count,
+        COUNT(CASE WHEN role = 'parent' THEN 1 END) as parent_count,
+        COUNT(CASE WHEN role = 'teacher' THEN 1 END) as teacher_count,
+        COUNT(CASE WHEN last_login_at >= NOW() - INTERVAL '7 days' THEN 1 END) as recent_active
+      FROM users
+    `);
     
     const totalUsers = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(totalUsers / limit);
@@ -882,13 +936,34 @@ const getAllUsers = async (req, res) => {
     res.json({
       success: true,
       data: {
-        users: usersResult.rows,
+        users: usersResult.rows.map(user => ({
+          ...user,
+          complaint_count: parseInt(user.complaint_count) || 0,
+          visit_count: parseInt(user.visit_count) || 0
+        })),
         pagination: {
           current_page: page,
           total_pages: totalPages,
           total_users: totalUsers,
-          per_page: limit
-        }
+          per_page: limit,
+          has_next: page < totalPages,
+          has_prev: page > 1
+        },
+        statistics: statsResult.rows[0],
+        filters_applied: {
+          search: search || null,
+          role: role || null,
+          status: status || null,
+          date_range: {
+            from: dateFrom || null,
+            to: dateTo || null
+          },
+          sort: {
+            field: sortBy,
+            order: sortOrder.toUpperCase()
+          }
+        },
+        generated_at: new Date().toISOString()
       }
     });
 
@@ -1089,4 +1164,364 @@ module.exports = {
   getAllUsers,
   updateUserById,
   deleteUserById
+};
+
+/**
+ * 👤 특정 사용자 상세 정보 조회 (관리자용)
+ * @route GET /api/admin/users/:id
+ */
+const getUserById = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    
+    // 사용자 상세 정보 조회
+    const userResult = await query(`
+      SELECT 
+        id, email, name, phone, role, is_active, email_verified,
+        profile_image, created_at, updated_at, last_login_at,
+        email_notifications, sms_notifications, language, timezone,
+        privacy_level, two_factor_enabled, login_attempts, locked_until
+      FROM users 
+      WHERE id = $1
+    `, [targetUserId]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+    
+    const user = userResult.rows[0];
+    
+    // 사용자 활동 통계
+    const activityResult = await query(`
+      SELECT 
+        COUNT(c.*) as total_complaints,
+        COUNT(CASE WHEN c.status = 'pending' THEN 1 END) as pending_complaints,
+        COUNT(CASE WHEN c.status = 'resolved' THEN 1 END) as resolved_complaints,
+        COUNT(v.*) as total_visits,
+        COUNT(CASE WHEN v.status = 'completed' THEN 1 END) as completed_visits,
+        MAX(c.created_at) as last_complaint_date,
+        MAX(v.created_at) as last_visit_date
+      FROM users u
+      LEFT JOIN complaints c ON u.id = c.user_id AND c.is_active = true
+      LEFT JOIN visits v ON u.id = v.user_id
+      WHERE u.id = $1
+      GROUP BY u.id
+    `, [targetUserId]);
+    
+    const activity = activityResult.rows[0] || {};
+    
+    // 최근 로그인 이력
+    const loginHistory = await query(`
+      SELECT 
+        created_at as login_time,
+        ip_address,
+        user_agent
+      FROM security_logs 
+      WHERE user_id = $1 AND action = 'LOGIN_SUCCESS'
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [targetUserId]);
+    
+    res.json({
+      success: true,
+      data: {
+        user: {
+          ...user,
+          activity: {
+            total_complaints: parseInt(activity.total_complaints) || 0,
+            pending_complaints: parseInt(activity.pending_complaints) || 0,
+            resolved_complaints: parseInt(activity.resolved_complaints) || 0,
+            total_visits: parseInt(activity.total_visits) || 0,
+            completed_visits: parseInt(activity.completed_visits) || 0,
+            last_complaint_date: activity.last_complaint_date,
+            last_visit_date: activity.last_visit_date
+          },
+          login_history: loginHistory.rows || []
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('사용자 상세 조회 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '사용자 상세 정보 조회 중 오류가 발생했습니다.'
+    });
+  }
+};
+
+/**
+ * 🔐 사용자 비밀번호 초기화 (관리자용)
+ * @route POST /api/admin/users/:id/reset-password
+ */
+const adminResetPassword = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const { new_password, send_notification = true } = req.body;
+    const adminId = req.user.id;
+    
+    // 대상 사용자 확인
+    const userResult = await query(
+      'SELECT id, email, name FROM users WHERE id = $1',
+      [targetUserId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+    
+    const targetUser = userResult.rows[0];
+    
+    // 새 비밀번호 해시화
+    const saltRounds = 12;
+    const newPasswordHash = await bcrypt.hash(new_password, saltRounds);
+    
+    // 트랜잭션으로 처리
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+      
+      // 비밀번호 업데이트 및 토큰 버전 증가 (모든 세션 무효화)
+      await client.query(
+        `UPDATE users 
+         SET password_hash = $1, 
+             token_version = token_version + 1,
+             login_attempts = 0,
+             locked_until = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [newPasswordHash, targetUserId]
+      );
+      
+      // 관리자 작업 로그 기록
+      await client.query(
+        `INSERT INTO admin_actions 
+         (admin_id, target_user_id, action, details, ip_address, user_agent, created_at)
+         VALUES ($1, $2, 'PASSWORD_RESET', $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [
+          adminId,
+          targetUserId,
+          `Admin reset password for user: ${targetUser.email}`,
+          req.ip || req.connection.remoteAddress || 'unknown',
+          req.get('User-Agent') || 'unknown'
+        ]
+      );
+      
+      await client.query('COMMIT');
+      
+      res.json({
+        success: true,
+        message: `사용자 '${targetUser.name}'의 비밀번호가 성공적으로 초기화되었습니다.`,
+        data: {
+          user_id: targetUserId,
+          user_email: targetUser.email,
+          reset_at: new Date().toISOString(),
+          notification_sent: send_notification
+        }
+      });
+      
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('관리자 비밀번호 초기화 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '비밀번호 초기화 중 오류가 발생했습니다.'
+    });
+  }
+};
+
+/**
+ * 🔓 사용자 계정 잠금 해제 (관리자용)
+ * @route POST /api/admin/users/:id/unlock
+ */
+const unlockUserAccount = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const adminId = req.user.id;
+    
+    // 대상 사용자 확인
+    const userResult = await query(
+      'SELECT id, email, name, locked_until FROM users WHERE id = $1',
+      [targetUserId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+    
+    const targetUser = userResult.rows[0];
+    
+    if (!targetUser.locked_until || new Date(targetUser.locked_until) <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: '해당 사용자는 현재 잠금 상태가 아닙니다.'
+      });
+    }
+    
+    // 계정 잠금 해제
+    await query(
+      `UPDATE users 
+       SET login_attempts = 0, 
+           locked_until = NULL, 
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [targetUserId]
+    );
+    
+    // 관리자 작업 로그 기록
+    await query(
+      `INSERT INTO admin_actions 
+       (admin_id, target_user_id, action, details, ip_address, user_agent, created_at)
+       VALUES ($1, $2, 'UNLOCK_ACCOUNT', $3, $4, $5, CURRENT_TIMESTAMP)`,
+      [
+        adminId,
+        targetUserId,
+        `Admin unlocked account for user: ${targetUser.email}`,
+        req.ip || req.connection.remoteAddress || 'unknown',
+        req.get('User-Agent') || 'unknown'
+      ]
+    );
+    
+    res.json({
+      success: true,
+      message: `사용자 '${targetUser.name}'의 계정 잠금이 해제되었습니다.`,
+      data: {
+        user_id: targetUserId,
+        user_email: targetUser.email,
+        unlocked_at: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('계정 잠금 해제 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '계정 잠금 해제 중 오류가 발생했습니다.'
+    });
+  }
+};
+
+/**
+ * 📊 관리자용 사용자 통계
+ * @route GET /api/admin/users/stats
+ */
+const getAdminUserStats = async (req, res) => {
+  try {
+    const period = req.query.period || '30';
+    
+    // 전체 사용자 통계
+    const overallStats = await query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
+        COUNT(CASE WHEN is_active = false THEN 1 END) as inactive_users,
+        COUNT(CASE WHEN email_verified = true THEN 1 END) as verified_users,
+        COUNT(CASE WHEN profile_image IS NOT NULL THEN 1 END) as users_with_avatar,
+        COUNT(CASE WHEN created_at >= NOW() - INTERVAL '${period} days' THEN 1 END) as new_users,
+        COUNT(CASE WHEN last_login_at >= NOW() - INTERVAL '7 days' THEN 1 END) as recently_active,
+        COUNT(CASE WHEN locked_until > NOW() THEN 1 END) as locked_users
+      FROM users
+    `);
+    
+    // 역할별 통계
+    const roleStats = await query(`
+      SELECT 
+        role,
+        COUNT(*) as count,
+        COUNT(CASE WHEN is_active = true THEN 1 END) as active_count
+      FROM users
+      GROUP BY role
+      ORDER BY count DESC
+    `);
+    
+    // 가입 트렌드 (최근 12개월)
+    const registrationTrend = await query(`
+      SELECT 
+        TO_CHAR(created_at, 'YYYY-MM') as month,
+        COUNT(*) as registrations
+      FROM users
+      WHERE created_at >= NOW() - INTERVAL '12 months'
+      GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+      ORDER BY month DESC
+    `);
+    
+    // 활성도 분석
+    const activityAnalysis = await query(`
+      SELECT 
+        CASE 
+          WHEN last_login_at IS NULL THEN 'never_logged_in'
+          WHEN last_login_at >= NOW() - INTERVAL '7 days' THEN 'highly_active'
+          WHEN last_login_at >= NOW() - INTERVAL '30 days' THEN 'moderately_active'
+          WHEN last_login_at >= NOW() - INTERVAL '90 days' THEN 'low_active'
+          ELSE 'inactive'
+        END as activity_level,
+        COUNT(*) as user_count
+      FROM users
+      WHERE is_active = true
+      GROUP BY 
+        CASE 
+          WHEN last_login_at IS NULL THEN 'never_logged_in'
+          WHEN last_login_at >= NOW() - INTERVAL '7 days' THEN 'highly_active'
+          WHEN last_login_at >= NOW() - INTERVAL '30 days' THEN 'moderately_active'
+          WHEN last_login_at >= NOW() - INTERVAL '90 days' THEN 'low_active'
+          ELSE 'inactive'
+        END
+      ORDER BY user_count DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: {
+        overview: overallStats.rows[0],
+        role_distribution: roleStats.rows,
+        registration_trend: registrationTrend.rows,
+        activity_analysis: activityAnalysis.rows,
+        period_info: {
+          period_days: parseInt(period),
+          generated_at: new Date().toISOString()
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('관리자 사용자 통계 조회 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '사용자 통계 조회 중 오류가 발생했습니다.'
+    });
+  }
+};
+
+// 기존 함수들에 새로운 함수들 추가
+module.exports = {
+  getProfile,
+  updateProfile,
+  changePassword,
+  updateSettings,
+  deleteAccount,
+  getUserStats,
+  uploadAvatar,
+  getAllUsers,
+  updateUserById,
+  deleteUserById,
+  getUserById,
+  adminResetPassword,
+  unlockUserAccount,
+  getAdminUserStats
 };

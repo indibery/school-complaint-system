@@ -25,6 +25,7 @@ const complaintRoutes = require('./backend/routes/complaints');
 const visitRoutes = require('./backend/routes/visits');
 const securityRoutes = require('./backend/routes/security');
 const userRoutes = require('./backend/routes/users');
+const adminRoutes = require('./backend/routes/admin');
 // const notificationRoutes = require('./backend/routes/notifications');
 
 const app = express();
@@ -164,6 +165,7 @@ app.use('/api/complaints', complaintRoutes);
 app.use('/api/visits', visitRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
 // app.use('/api/notifications', notificationRoutes);
 
 // =================================
