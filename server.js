@@ -24,8 +24,9 @@ const authRoutes = require('./backend/routes/auth');
 const complaintRoutes = require('./backend/routes/complaints');
 const visitRoutes = require('./backend/routes/visits');
 const securityRoutes = require('./backend/routes/security');
+const userRoutes = require('./backend/routes/users');
+const adminRoutes = require('./backend/routes/admin');
 // const notificationRoutes = require('./backend/routes/notifications');
-// const userRoutes = require('./backend/routes/users');
 
 const app = express();
 
@@ -148,7 +149,11 @@ app.get('/api', (req, res) => {
       'POST /api/visits - 방문 예약',
       'GET /api/security/visitors/current - 현재 방문자 현황',
       'POST /api/security/checkin - 방문자 체크인',
-      'POST /api/security/checkout - 방문자 체크아웃'
+      'POST /api/security/checkout - 방문자 체크아웃',
+      'GET /api/users/profile - 내 프로필 조회',
+      'PUT /api/users/profile - 프로필 수정',
+      'PUT /api/users/password - 비밀번호 변경',
+      'GET /api/users/stats - 사용자 통계'
     ],
     documentation: NODE_ENV === 'development' ? '/docs/API.md' : null
   });
@@ -159,8 +164,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/complaints', complaintRoutes);
 app.use('/api/visits', visitRoutes);
 app.use('/api/security', securityRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
 // app.use('/api/notifications', notificationRoutes);
-// app.use('/api/users', userRoutes);
 
 // =================================
 // 🚫 에러 처리 미들웨어

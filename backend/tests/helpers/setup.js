@@ -9,6 +9,13 @@ process.env.EMAIL_USER = 'test@test.com';
 process.env.EMAIL_PASS = 'test-password';
 process.env.FROM_EMAIL = 'test@school.com';
 
+// 데이터베이스 모킹을 위한 설정
+process.env.DB_HOST = 'mock-host';
+process.env.DB_PORT = '5432';
+process.env.DB_NAME = 'mock-test-db';
+process.env.DB_USER = 'mock-user';
+process.env.DB_PASSWORD = 'mock-password';
+
 // 인메모리 테스트 데이터 저장소
 global.testData = {
   users: new Map(),
@@ -162,6 +169,18 @@ async function cleanupTestData() {
 
 // 테스트 헬퍼 함수들을 전역으로 사용할 수 있도록 설정
 global.cleanupTestData = cleanupTestData;
+
+// dbHelpers 객체 생성 (호환성을 위해)
+global.dbHelpers = {
+  setup: async () => {
+    console.log('✅ Mock database setup completed');
+    return await cleanupTestData();
+  },
+  cleanup: async () => {
+    console.log('✅ Mock database cleanup completed');
+    return await cleanupTestData();
+  }
+};
 
 // Jest timeout 설정
 jest.setTimeout(30000);

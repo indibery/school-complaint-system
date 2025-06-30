@@ -257,3 +257,8 @@ global.testPool.query = async function(sql, params = []) {
 };
 
 console.log('✅ Extended mock database with token management');
+
+// 모듈 export
+module.exports = {
+  mockQuery: global.testPool.query
+};

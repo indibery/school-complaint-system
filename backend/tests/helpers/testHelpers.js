@@ -123,13 +123,23 @@ function generateTestTokens(userId, tokenVersion = 0) {
   const accessToken = jwt.sign(
     accessTokenPayload,
     process.env.JWT_SECRET,
-    { expiresIn: '24h' }
+    { 
+      expiresIn: '24h',
+      algorithm: 'HS256',
+      issuer: 'school-complaint-system',
+      audience: 'school-system-users'
+    }
   );
 
   const refreshToken = jwt.sign(
     refreshTokenPayload,
     process.env.JWT_REFRESH_SECRET,
-    { expiresIn: '7d' }
+    { 
+      expiresIn: '7d',
+      algorithm: 'HS256',
+      issuer: 'school-complaint-system',
+      audience: 'school-system-users'
+    }
   );
 
   return {
